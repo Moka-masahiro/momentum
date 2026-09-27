@@ -6,6 +6,7 @@ import SearchSheet from "./components/SearchSheet";
 import { Icon, Sheet } from "./components/ui";
 import Home from "./pages/Home";
 import Market from "./pages/Market";
+import Movers from "./pages/Movers";
 import Ranking from "./pages/Ranking";
 import Settings from "./pages/Settings";
 import Signals from "./pages/Signals";
@@ -89,6 +90,9 @@ function Main() {
       break;
     case "market":
       view = <Market />;
+      break;
+    case "movers":
+      view = <Movers />;
       break;
     case "verify":
       view = <Verify />;

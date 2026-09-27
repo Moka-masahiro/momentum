@@ -55,3 +55,10 @@ export function mdDate(s: string | null | undefined): string {
 export function slashDate(s: string | null | undefined): string {
   return s ? s.replace(/-/g, "/") : "";
 }
+
+/** "2026-09-25 08:30" → "9/25 08:30" */
+export function mdTime(s: string | null | undefined): string {
+  if (!s) return "";
+  const [d, t] = s.split(" ");
+  return `${mdDate(d)} ${t ?? ""}`.trim();
+}

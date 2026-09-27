@@ -2,6 +2,9 @@
 
 export type Rank = "S" | "A" | "B" | "C" | "D";
 
+/** 値動きの理由（pipeline/momentum/reasons.py）。目立って動いた日だけに付く */
+export type Why = "news" | "supply" | "market" | "unknown";
+
 export interface Series {
   dates: string[];
   values: (number | null)[];
@@ -32,6 +35,63 @@ export interface StockRow {
   base?: boolean;       // 終値100円以上（ランキングの母集団）
   t?: number | null;    // モメンタム度の元になる合成z値（同点のときの並び順に使う）
   missing?: boolean;
+  why?: Why | null;         // 値動きの理由（シグナル一覧では、その日の理由に置き換える）
+  why_text?: string | null; // 短い文言（開示の要約・手がかり）
+  idio?: number | null;     // 業種の中央値との差（%）
+  vr?: number | null;       // 出来高 ÷ 直前20日平均
+}
+
+export interface Disclosure {
+  time: string;             // "2026-09-25 08:30"
+  title: string;
+  category: string;         // 決算・業績修正・増資・売出し…
+  kind: "news" | "supply" | "routine";
+  url: string | null;       // TDnet の PDF（31日で消える）
+  day: string | null;       // その開示が効いた取引日（null = まだ来ていない）
+  ret?: number | null;      // その日の騰落率（%）
+  idio?: number | null;     // その日の業種の中央値との差（%）
+}
+
+export interface Reason {
+  date: string;
+  label: Why | null;
+  text: string | null;
+  notable: boolean;         // 目立って動いたか
+  checked: boolean;         // 開示を確かめられたか（取れなかった日を含むと false）
+  ret: number | null;
+  idio: number | null;
+  z: number | null;         // 業種との差 ÷ 普段のばらつき
+  vr: number | null;
+  sector: string | null;
+  sector_ret: number | null;
+  market_ret: number | null;
+  disclosures: Disclosure[];                // 判定の窓（前の取引日の引け後〜当日の引け）の開示
+  clues: { key: string; text: string }[];   // 需給の手がかり
+  short: { now: number; prev: number; change: number; holders: number; date: string } | null;
+  premium: { rate: number; max: number | null; date: string | null } | null;
+  flags: string[];
+}
+
+export interface SourceStatus {
+  ok: boolean;
+  date: string | null;
+  error: string | null;
+}
+
+export interface ReasonStatus {
+  date: string;
+  disclosures: { ok: boolean; count: number; latest: string | null; days_failed: number; error: string | null };
+  short: SourceStatus;
+  flags: SourceStatus;
+  premium: SourceStatus;
+  counts: Record<Why, number>;
+  unchecked: number;
+}
+
+export interface MoversResponse {
+  as_of: string;
+  status: ReasonStatus | null;
+  items: StockRow[];        // 理由の付いた銘柄（業種との差の大きい順）
 }
 
 export interface IndexSummary {
@@ -88,7 +148,9 @@ export interface Home {
     signals_significant: number;
   };
   signals: { total: number; liquid: number; by_type: SignalTypeCount[] };
+  reasons?: ReasonStatus | null;    // 値動きの理由の材料の取得状況（古いデータには無い）
   watchlist: StockRow[];
+  movers: StockRow[];               // 流動性のある銘柄のうち、理由の付いたもの（画面側で作る）
 }
 
 export interface RankingResponse {
@@ -215,6 +277,8 @@ export interface Metrics {
 export interface StockDetail extends StockRow {
   as_of: string;
   watched: boolean;
+  reason?: Reason | null;          // 古いデータには無い
+  disclosures?: Disclosure[];      // 直近30日の開示（新しい順）
   metrics: Metrics;
   radar: { key: string; label: string; value: number | null }[];
   rank_history: RankBucket | null;

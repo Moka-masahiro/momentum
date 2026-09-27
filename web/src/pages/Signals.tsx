@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, RankBadge } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, WhyNote } from "../components/ui";
 import { mdDate, num, pct } from "../format";
 import { back, go } from "../router";
 import type { SignalGroup, SignalsResponse } from "../types";
@@ -45,6 +45,8 @@ export default function Signals({ date }: { date?: string }) {
               シグナルは「その日に起きたこと」の検知で、予想ではありません。各シグナルの実績は、
               <b>翌営業日の始値で入り、N営業日後の終値まで</b>の値動きを、<b>同じ期間の市場平均との差</b>で測っています。
               相場全体が上がった期間は、どんなシグナルでも素の成績はプラスに見えるためです。
+              銘柄に付いた「ニュース」「需給」などは、その日に目立って動いた理由の手がかりです
+              （空売り残高と規制は最新日だけ判定に使うので、過去の日は材料不明が多めに出ます）。
             </p>
           </div>
           {data.groups.map((g, i) => (
@@ -70,7 +72,13 @@ function Group({ g, liquidOnly, guide }: { g: SignalGroup; liquidOnly: boolean; 
         {shown.length === 0 && <p className="text-[13px] t-3 py-2">この日の発動はありません。</p>}
         {shown.map((r) => (
           <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr 58px auto 40px" }} onClick={() => go(`stock/${r.code}`)}>
-            <span className="list-name"><b>{r.name}</b><small>{r.code} · {r.segment ?? "—"}{!r.liquid ? " · 薄商い" : ""}</small></span>
+            <span className="list-name">
+              <b>{r.name}</b>
+              <small className="list-sub">
+                <span>{r.code}{r.why ? "" : ` · ${r.segment ?? "—"}`}{!r.liquid ? " · 薄商い" : ""}</span>
+                <WhyNote row={r} />
+              </small>
+            </span>
             <span className="text-right text-[12px]"><Delta v={r.chg1} /></span>
             <span className="text-right text-[16px] font-bold num">{num(r.score)}</span>
             <span className="text-center"><RankBadge rank={r.rank} /></span>

@@ -2,12 +2,14 @@
 
 サーバーが無いので、画面が必要とするものはすべて前もってファイルにしておく。
 
-    home      ホーム（地合いの要約・ランキング上位・当日のシグナル数）
-    latest    全銘柄の最新の値（ランキングの絞り込み・検索・ウォッチリストは画面側でここから作る）
+    home      ホーム（地合いの要約・ランキング上位・当日のシグナル数・値動きの理由の取得状況）
+    latest    全銘柄の最新の値と値動きの理由（ランキングの絞り込み・検索・ウォッチリスト・
+              「動いた銘柄」の一覧は画面側でここから作る）
     market    地合いの推移（日経平均・市場区分の中央値・ランクB以上の比率）
-    signals   直近20営業日のシグナルと、種別ごとの過去の実績
+    signals   直近20営業日のシグナル（その日の値動きの理由付き）と、種別ごとの過去の実績
     verify    検証（IC・ランク別・十分位・シグナル実績・分割補正の記録）
-    stocks/<code>  1銘柄の詳細（チャート・指標・5角形・シグナル履歴・テクニカル整理）
+    stocks/<code>  1銘柄の詳細（チャート・指標・5角形・シグナル履歴・テクニカル整理・
+                   値動きの理由・直近30日の開示）
 """
 import math
 from datetime import datetime, timedelta, timezone
@@ -26,6 +28,7 @@ LATEST_COLUMNS = (
     "code", "name", "segment", "sector33", "close", "chg1", "chg5", "chg20", "chg60",
     "score", "rank", "score_d1", "score_d5", "score_d20", "position", "turnover20",
     "liquid", "base", "traded_today", "last_date", "signals_today", "t",
+    "why", "why_text", "idio", "vr",
 )
 
 
@@ -71,13 +74,19 @@ def row(code: str, r: pd.Series) -> dict:
         "last_date": r["last_date"],
         "signals_today": sigs if isinstance(sigs, list) else [],
         "t": _r(r["t"], 3),
+        # 値動きの理由（目立って動いた日だけ。reasons.py）
+        "why": _str(r.get("why")),
+        "why_text": _str(r.get("why_text")),
+        "idio": _r(r.get("idio"), 2),     # 業種の中央値との差（%）
+        "vr": _r(r.get("vr"), 1),         # 出来高 ÷ 直前20日平均
     }
 
 
 def documents(st: State) -> Iterator[tuple[str, dict]]:
     """(ファイル名, 中身) を順に返す。"""
     built_at = datetime.now(JST).strftime("%Y-%m-%d %H:%M")
-    rows = {code: row(code, r) for code, r in st.latest.iterrows()}
+    latest = st.latest if st.reasons is None else st.latest.join(st.reasons.latest)
+    rows = {code: row(code, r) for code, r in latest.iterrows()}
     market = _market(st)
     yield "home", _home(st, rows, market, built_at)
     yield "latest", _latest(st, rows)
@@ -121,6 +130,8 @@ def _home(st: State, rows: dict, market: dict, built_at: str) -> dict:
         },
         "ranking": [rows[code] for code in top.index],
         "verify_summary": _verify_summary(st),
+        # 値動きの理由の材料の取得状況（None = 理由を作れなかった）
+        "reasons": _finite(st.reasons.status) if st.reasons else None,
         "signals": {
             "total": int(len(ev_today)),
             "liquid": int(ev_today["liquid"].sum()) if len(ev_today) else 0,
@@ -163,11 +174,15 @@ def _latest(st: State, rows: dict) -> dict:
 def _signals(st: State) -> dict:
     ev = st.events
     recent = sorted(ev["date"].unique())[-SIGNAL_DAYS:]
+    rs = st.reasons
     events = {}
     for d in recent:
         day = ev[ev["date"] == d]
-        events[pd.Timestamp(d).strftime("%Y-%m-%d")] = [
-            [code, key, bool(liq)] for code, key, liq in zip(day["code"], day["key"], day["liquid"])
+        ds = pd.Timestamp(d).strftime("%Y-%m-%d")
+        # [銘柄, シグナル, 流動性あり, その日の値動きの理由, 短い文言]
+        events[ds] = [
+            [code, key, bool(liq), *(rs.label(ds, code) if rs else (None, None))]
+            for code, key, liq in zip(day["code"], day["key"], day["liquid"])
         ]
     return {
         "as_of": st.as_of,
@@ -291,7 +306,22 @@ def stock(st: State, code: str, r: dict, pct: dict, ranks: dict,
         "signals": _stock_events(st, code, events),
         "report": rep,
         "chart": chart,
+        # 値動きの理由（最新日）と直近30日の開示。理由を作れなかった日は None / []
+        "reason": _finite(st.reasons.detail.get(code)) if st.reasons else None,
+        "disclosures": _finite(st.reasons.disclosures.get(code, [])) if st.reasons else [],
     }
+
+
+def _finite(x):
+    """NaN・無限大を None にする。暗号化の前の JSON 化は NaN で失敗するので（allow_nan=False）、
+    補助的な値動きの理由のせいで毎日の公開全体が止まらないようにする。"""
+    if isinstance(x, dict):
+        return {k: _finite(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_finite(v) for v in x]
+    if isinstance(x, float) and not math.isfinite(x):
+        return None
+    return x
 
 
 def _stock_events(st: State, code: str, ev: pd.DataFrame | None) -> list[dict]:

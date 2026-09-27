@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, ErrorBox, Icon, Loading, RankBadge, Seg } from "../components/ui";
+import { Card, ErrorBox, Icon, Loading, RankBadge, Seg, WhyNote } from "../components/ui";
 import { num, pct } from "../format";
 import { back, go } from "../router";
 import type { RankingResponse } from "../types";
@@ -45,7 +45,10 @@ export default function Ranking() {
                 <span className="list-pos">#{i + 1}</span>
                 <span className="list-name">
                   <b>{r.name}</b>
-                  <small>{r.code} · {r.segment ?? "—"}{r.signals_today.length ? " · ⚡" : ""}</small>
+                  <small className="list-sub">
+                    <span>{r.code} · {r.segment ?? "—"}{r.signals_today.length ? " · ⚡" : ""}</span>
+                    <WhyNote row={r} text={false} />
+                  </small>
                 </span>
                 <span className={`text-right text-[12px] num ${r.chg20 != null && r.chg20 >= 0 ? "t-up" : "t-down"}`}>{pct(r.chg20)}</span>
                 <span className="list-val">{num(r.score)}</span>
@@ -59,6 +62,7 @@ export default function Ranking() {
             )}
             <p className="note mt-3">
               並びはモメンタム度の順（値が同じときは元の合成z値の順）。⚡は本日シグナルが出た銘柄。
+              「ニュース」「需給」などは、きょう目立って動いた銘柄に付けた理由の手がかりです（タップすると詳細の「値動きの理由」で根拠を確認できます）。
               上位ほど「今のトレンドが強い」銘柄ですが、これまでの検証では、上位がその後も市場平均を上回るとは言えません（検証画面）。
             </p>
           </Card>

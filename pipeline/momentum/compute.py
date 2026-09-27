@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import data, indicators as ind, signals as sig, validate
+from . import data, indicators as ind, reasons as rsn, signals as sig, validate
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ class State:
     latest: pd.DataFrame                  # 最新日の銘柄ごとの値（index=code）
     elapsed_sec: float = 0.0
     adjusted: set = field(default_factory=set)
+    reasons: rsn.Reasons | None = None    # 値動きの理由（build.py が後から入れる。作れなければ None）
 
     @property
     def as_of(self) -> str:

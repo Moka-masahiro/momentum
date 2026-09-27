@@ -8,6 +8,10 @@
 合言葉は環境変数 MOMENTUM_PASSPHRASE（GitHub では Actions の secret）。
 取れた銘柄が少なすぎる・日付が古すぎるときは失敗で終える。そうすれば公開は行われず、
 前日のデータが残る（壊れたデータで上書きしない）。
+
+値動きの理由の材料（適時開示・空売り残高・日々公表銘柄・逆日歩）も取るが、こちらは
+取れなくても失敗にしない。取れなかったものは画面に「取得できず」と出る。
+--cache を付けたときは、材料も同じフォルダーの extras.pkl に保存して使い回す。
 """
 import argparse
 import base64
@@ -26,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import fetch  # noqa: E402
 import secure  # noqa: E402
-from momentum import data, export  # noqa: E402
+from momentum import data, export, reasons  # noqa: E402
 from momentum.compute import compute  # noqa: E402
 
 logger = logging.getLogger("build")
@@ -65,6 +69,7 @@ def main() -> int:
 
     panel = data.make_panel(bars, master)
     st = compute(panel, index)
+    st.reasons = _reasons(args, st)
 
     cfg = secure.load_config()
     key = secure.derive_key(passphrase, cfg)
@@ -101,10 +106,55 @@ def main() -> int:
         "files": n_files,
         "size_mb": round(size / 1e6, 1),
         "elapsed_sec": round(time.monotonic() - started, 1),
+        "reasons": reasons.brief(st.reasons.status if st.reasons else None),
     }
     STATUS.write_text(json.dumps(status, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     logger.info("done: %s", json.dumps(status, ensure_ascii=False))
     return 0
+
+
+def _reasons(args, st):
+    """値動きの理由。材料が取れなくても、株価と指標の公開は止めない。"""
+    now = pd.Timestamp(datetime.now(JST).replace(tzinfo=None))
+    try:
+        ex = _load_extras(args, st.panel.dates, now)
+        rs = reasons.compute(st.panel, st.base, ex, now)
+        logger.info("reasons: %s", json.dumps(reasons.brief(rs.status), ensure_ascii=False))
+        return rs
+    except Exception:
+        logger.exception("値動きの理由を作れませんでした（理由なしで公開します）")
+        return None
+
+
+def _load_extras(args, dates: pd.DatetimeIndex, now: pd.Timestamp) -> reasons.Extras:
+    cache = Path(args.cache).with_name("extras.pkl") if args.cache else None
+    if cache and cache.exists():
+        logger.info("loading cache %s", cache)
+        return pd.read_pickle(cache)
+    ex = reasons.Extras()
+    # 判定する最も古い日の、前の取引日の引け後から（銘柄詳細の一覧用に30日前からも）
+    start = min(dates[-reasons.WINDOW_DAYS - 1].date(), (now - pd.Timedelta(days=reasons.LIST_DAYS)).date())
+    try:
+        ex.disclosures, ex.disclosure_days = fetch.fetch_disclosures(start, now.date())
+    except Exception as e:
+        ex.errors["disclosures"] = str(e)
+    try:
+        ex.short = fetch.fetch_short_positions()
+    except Exception as e:
+        ex.errors["short"] = str(e)
+    try:
+        ex.flags, ex.flags_date = fetch.fetch_margin_flags()
+    except Exception as e:
+        ex.errors["flags"] = str(e)
+    try:
+        ex.premium = fetch.fetch_premium()
+    except Exception as e:
+        ex.errors["premium"] = str(e)
+    for k, v in ex.errors.items():
+        logger.warning("%s: 取得できませんでした（%s）", k, v)
+    if cache:
+        pd.to_pickle(ex, cache)
+    return ex
 
 
 def _load(args):

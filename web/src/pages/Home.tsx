@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, Disclaimer } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, Disclaimer, WHY_LABEL, WhyNote } from "../components/ui";
 import Spark from "../components/Spark";
 import { num, pct, slashDate, yen } from "../format";
 import { flag, go, setFlag } from "../router";
-import type { Home as HomeData, StockRow } from "../types";
+import type { Home as HomeData, StockRow, Why } from "../types";
 
 export default function Home({ onGuide }: { onGuide: () => void }) {
   const { data, error, loading, reload } = useData<HomeData>(paths.home, api.home);
@@ -54,6 +54,7 @@ export default function Home({ onGuide }: { onGuide: () => void }) {
       {data && (
         <div className={loading ? "fade-stale" : ""}>
           <MarketCard data={data} />
+          <MoversCard data={data} />
           <RankingCard rows={data.ranking} universe={data.universe} />
           <SignalCard data={data} />
           <WatchCard rows={data.watchlist} />
@@ -151,6 +152,49 @@ function MarketCard({ data }: { data: HomeData }) {
   );
 }
 
+const MOVER_ORDER: Why[] = ["news", "supply", "unknown", "market"];
+
+function MoversCard({ data }: { data: HomeData }) {
+  const st = data.reasons;
+  if (st === undefined) return null; // 値動きの理由の無い古いデータ
+  const rows = data.movers;
+  const top = rows.filter((r) => r.why !== "market").slice(0, 5);
+  return (
+    <Card icon="pulse" title="きょう目立って動いた銘柄" link="一覧を見る" onLink={() => go("movers")} guide="movers"
+      sub="業種平均との差か出来高が、普段の3倍以上だった銘柄（流動性あり）と、その理由の手がかり">
+      {st === null ? (
+        <p className="note">この日は値動きの理由を作れませんでした（材料の取得か計算に失敗）。</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-1.5">
+            {MOVER_ORDER.map((k) => (
+              <button key={k} className={`why why-${k} !text-[12px] !py-1.5 !px-2`} onClick={() => go("movers")}>
+                {WHY_LABEL[k]} {rows.filter((r) => r.why === k).length}
+              </button>
+            ))}
+          </div>
+          {!st.disclosures.ok && (
+            <p className="note t-warn mt-2">開示を取得できなかったため、ニュースかどうかの判定をしていません。</p>
+          )}
+          <div className="mt-2">
+            {top.map((r) => (
+              <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr auto" }} onClick={() => go(`stock/${r.code}`)}>
+                <span className="list-name">
+                  <b>{r.name}</b>
+                  <small className="list-sub"><WhyNote row={r} /></small>
+                </span>
+                <span className="text-right text-[13px] font-semibold"><Delta v={r.chg1} /></span>
+              </button>
+            ))}
+            {top.length === 0 && <p className="note mt-1">業種の動きと違う目立った値動きはありませんでした。</p>}
+          </div>
+          <p className="note mt-2">ニュースは会社の適時開示だけで、新聞報道は含みません。材料不明は、開示も需給の手がかりも無かったものです。</p>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function RankingCard({ rows, universe }: { rows: StockRow[]; universe: number }) {
   return (
     <Card icon="trend" title="モメンタム度ランキング" link="TOP 50 を見る" onLink={() => go("ranking")} guide="ranking"
@@ -161,7 +205,10 @@ function RankingCard({ rows, universe }: { rows: StockRow[]; universe: number })
           <span className="list-pos">#{r.position}</span>
           <span className="list-name">
             <b>{r.name}</b>
-            <small>{r.code} · 1か月 <span className={r.chg20 != null && r.chg20 >= 0 ? "t-up" : "t-down"}>{pct(r.chg20)}</span></small>
+            <small className="list-sub">
+              <span>{r.code} · 1か月 <span className={r.chg20 != null && r.chg20 >= 0 ? "t-up" : "t-down"}>{pct(r.chg20)}</span></span>
+              <WhyNote row={r} text={false} />
+            </small>
           </span>
           <span className="list-val">{num(r.score)}</span>
           <span className="text-center"><RankBadge rank={r.rank} /></span>
@@ -214,7 +261,7 @@ function WatchCard({ rows }: { rows: StockRow[] }) {
           <div key={r.code} className="list-row"><span className="t-3 text-[12px]">{r.code}</span><span className="t-3 text-[12px]">日足なし</span><span /><span /></div>
         ) : (
           <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr auto auto 40px" }} onClick={() => go(`stock/${r.code}`)}>
-            <span className="list-name"><b>{r.name}</b><small>{r.code}</small></span>
+            <span className="list-name"><b>{r.name}</b><small className="list-sub"><span>{r.code}</span><WhyNote row={r} /></small></span>
             <span className="text-right text-[13px] num">{yen(r.close)}</span>
             <span className="text-right text-[12px] w-[52px]"><Delta v={r.chg1} /></span>
             <span className="text-center"><RankBadge rank={r.rank} /></span>

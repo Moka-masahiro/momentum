@@ -2,11 +2,17 @@ import { useEffect, useState } from "react";
 import { api, forgetKey, invalidate } from "../data";
 import { GuideMenu, type Tour } from "../components/Guide";
 import { Card, Icon } from "../components/ui";
-import { num, slashDate } from "../format";
+import { mdDate, num, slashDate } from "../format";
 import { back, setFlag } from "../router";
+import type { ReasonStatus, SourceStatus } from "../types";
 import { addMany, watchlist } from "../watch";
 
-type Status = { built: string; as_of: string; universe: number; stocks: number };
+type Status = { built: string; as_of: string; universe: number; stocks: number; reasons: ReasonStatus | null };
+
+function source(s: SourceStatus | undefined, label: string) {
+  if (!s) return "—";
+  return s.ok ? `${label}${s.date ? `（${mdDate(s.date)}分）` : ""}` : "取得できず";
+}
 
 export default function Settings({ onStartTour }: { onStartTour: (t: Tour) => void }) {
   const [st, setSt] = useState<Status | null>(null);
@@ -55,6 +61,22 @@ export default function Settings({ onStartTour }: { onStartTour: (t: Tour) => vo
             <tr><td>データ日付（最新の日足）</td><td>{st ? slashDate(st.as_of) : "—"}</td></tr>
             <tr><td>データを作った時刻</td><td>{st?.built ?? "—"}</td></tr>
             <tr><td>銘柄数（うち流動性あり）</td><td>{st ? `${num(st.stocks)}（${num(st.universe)}）` : "—"}</td></tr>
+            {st && (
+              <>
+                <tr>
+                  <td>適時開示（値動きの理由）</td>
+                  <td>
+                    {!st.reasons ? "作れず"
+                      : st.reasons.disclosures.ok
+                        ? `${num(st.reasons.disclosures.count)}件${st.reasons.disclosures.days_failed ? `（${st.reasons.disclosures.days_failed}日分取得できず）` : ""}`
+                        : "取得できず"}
+                  </td>
+                </tr>
+                <tr><td>空売り残高</td><td>{source(st.reasons?.short, "取得")}</td></tr>
+                <tr><td>日々公表銘柄など</td><td>{source(st.reasons?.flags, "取得")}</td></tr>
+                <tr><td>逆日歩</td><td>{source(st.reasons?.premium, "取得")}</td></tr>
+              </>
+            )}
           </tbody>
         </table>
         {err && <p className="t-warn text-[12px] mt-2 break-all">{err}</p>}
@@ -121,6 +143,12 @@ export default function Settings({ onStartTour }: { onStartTour: (t: Tour) => vo
           <li>銘柄名・市場区分・業種: JPX の東証上場銘柄一覧</li>
           <li>日経平均: yfinance（^N225）</li>
           <li>株式分割による価格の段差は、値幅制限を手がかりに自動で補正（検証画面に記録）</li>
+          <li>
+            値動きの理由の適時開示: やのしん TDnet WEB-API（個人運営の無料API）。東証の TDnet は自動取得を禁止しているため、
+            直接は取りに行かない。表題のリンク先は TDnet の PDF
+          </li>
+          <li>空売り残高・日々公表銘柄など・品貸料（逆日歩）: JPX の公表ファイル（毎日）</li>
+          <li>新聞報道・アナリストの格付けは使っていない（無料で自動取得してよい入手先が無いため）</li>
           <li>公開のページに置くので、データはすべて合言葉で暗号化している</li>
         </ul>
       </Card>

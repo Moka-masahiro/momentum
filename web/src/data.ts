@@ -14,13 +14,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   Home,
   MarketResponse,
+  MoversResponse,
   RankingResponse,
+  ReasonStatus,
   SignalGroup,
   SignalStats,
   SignalsResponse,
   StockDetail,
   StockRow,
   VerifyResponse,
+  Why,
 } from "./types";
 import { watchlist } from "./watch";
 
@@ -260,14 +263,22 @@ function norm(s: string): string {
 
 /* ---------------- 画面ごとの問い合わせ ---------------- */
 
-type HomeDoc = Omit<Home, "watchlist">;
+type HomeDoc = Omit<Home, "watchlist" | "movers">;
 
 interface SignalsDoc {
   as_of: string;
   dates: string[];
-  events: Record<string, [string, string, boolean][]>;
+  // [銘柄, シグナル, 流動性あり, その日の値動きの理由, 短い文言]（理由は新しいデータにだけある）
+  events: Record<string, [string, string, boolean, (Why | null)?, (string | null)?][]>;
   stats: Record<string, SignalStats>;
   defs: { key: string; label: string; tone: "up" | "warn"; rule: string }[];
+}
+
+/** 理由の付いた銘柄を、業種との差の大きい順に（地合いは業種ごと動いただけなので後ろに回る） */
+function moverRows(l: Latest): StockRow[] {
+  return l.rows
+    .filter((r) => r.why && r.traded_today)
+    .sort((a, b) => Math.abs(b.idio ?? 0) - Math.abs(a.idio ?? 0));
 }
 
 export const paths = {
@@ -275,6 +286,7 @@ export const paths = {
   ranking: (segment: string, minTurnover: number, limit: number) => `ranking|${segment}|${minTurnover}|${limit}`,
   stock: (code: string) => `stock|${code}`,
   signals: (date?: string) => `signals|${date ?? ""}`,
+  movers: "movers",
   market: "market",
   verify: "verify",
 };
@@ -282,7 +294,12 @@ export const paths = {
 export const api = {
   async home(): Promise<Home> {
     const [h, l] = await Promise.all([load<HomeDoc>("home"), latest()]);
-    return { ...h, watchlist: watchRows(l) };
+    return { ...h, watchlist: watchRows(l), movers: moverRows(l).filter((r) => r.liquid) };
+  },
+
+  async movers(): Promise<MoversResponse> {
+    const [h, l] = await Promise.all([load<HomeDoc>("home"), latest()]);
+    return { as_of: l.as_of, status: h.reasons ?? null, items: moverRows(l) };
   },
 
   async ranking(segment: string, minTurnover: number, limit: number): Promise<RankingResponse> {
@@ -305,7 +322,11 @@ export const api = {
     const groups: SignalGroup[] = s.defs.map((d) => {
       const items = today
         .filter(([, key]) => key === d.key)
-        .map(([code]) => l.byCode.get(code))
+        .map(([code, , , why, whyText]): StockRow | undefined => {
+          const r = l.byCode.get(code);
+          // 値動きの理由は、その日のものに置き換える（最新日の値のままだと別の日の理由になる）
+          return r && { ...r, why: why ?? null, why_text: whyText ?? null };
+        })
         .filter((r): r is StockRow => !!r)
         .sort((a, b) => Number(!a.liquid) - Number(!b.liquid) || (b.score ?? 0) - (a.score ?? 0));
       return { ...d, count: items.length, items, stats: s.stats[d.key] ?? null };
@@ -335,10 +356,10 @@ export const api = {
     return { items };
   },
 
-  /** 設定画面用: いま見ているデータの版 */
-  async status(): Promise<{ built: string; as_of: string; universe: number; stocks: number }> {
-    const [meta, l] = await Promise.all([loadMeta(), latest()]);
-    return { built: meta.built, as_of: l.as_of, universe: l.universe, stocks: l.rows.length };
+  /** 設定画面用: いま見ているデータの版と、値動きの理由の材料の取得状況 */
+  async status(): Promise<{ built: string; as_of: string; universe: number; stocks: number; reasons: ReasonStatus | null }> {
+    const [meta, l, h] = await Promise.all([loadMeta(), latest(), load<HomeDoc>("home")]);
+    return { built: meta.built, as_of: l.as_of, universe: l.universe, stocks: l.rows.length, reasons: h.reasons ?? null };
   },
 };
 

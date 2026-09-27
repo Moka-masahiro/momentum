@@ -8,7 +8,7 @@ import { Icon } from "./ui";
  * 紹介動画のアプリにあった「ステップごとに実データの画面を案内する」形を真似ている。
  */
 export interface Step {
-  route?: string;          // この画面へ移動してから案内する。"@top" はランキング1位の銘柄
+  route?: string;          // この画面へ移動してから案内する。"@top" はランキング1位、"@mover" は目立って動いた先頭の銘柄
   target: string;          // data-guide の値
   title: string;
   body: string;
@@ -62,6 +62,20 @@ export const TOURS: Tour[] = [
     ],
   },
   {
+    key: "reasons",
+    title: "値動きの理由の見方",
+    desc: "ニュース・需給・地合い・材料不明の意味と、根拠の確かめ方",
+    steps: [
+      { route: "", target: "movers", title: "きょう目立って動いた銘柄",
+        body: "業種平均との差か出来高が普段の3倍以上だった銘柄に、動いた理由の手がかりを付けています。ニュースは会社の適時開示、需給は増資・自社株買いの開示や出来高・信用取引の過熱、地合いは業種全体や同業の複数銘柄がそろって動いたものです。" },
+      { route: "movers", target: "movers-filter", title: "理由で絞り込む",
+        body: "ラベルごとに一覧できます。材料不明は、開示も需給の手がかりも無かったもの。新聞報道やテーマ買いなど、ここでは拾えない理由の可能性があります。" },
+      { route: "@mover", target: "reason", title: "銘柄ごとの根拠",
+        body: "判定に使った開示の表題（押すと PDF）、需給の手がかり、出来高・空売り残高・逆日歩・規制を並べています。下に直近30日の開示と、それが効いた日の値動きがあります。どれも状況証拠で、原因の証明ではありません。",
+        action: "ガイドを終える" },
+    ],
+  },
+  {
     key: "signals",
     title: "シグナルの見方",
     desc: "出来事の検知と、過去の実績の読み方",
@@ -108,6 +122,11 @@ export function GuideRunner({ tour, onClose }: { tour: Tour; onClose: () => void
       if (route === "@top") {
         const r = await api.ranking("", 50_000_000, 1).catch(() => null);
         route = r?.items[0] ? `stock/${r.items[0].code}` : "ranking";
+      }
+      if (route === "@mover") {
+        const m = await api.movers().catch(() => null);
+        const first = m?.items.find((r) => r.liquid && r.why !== "market") ?? m?.items[0];
+        route = first ? `stock/${first.code}` : "movers";
       }
       if (route !== undefined && current() !== route) go(route);
       // 画面の描画（データの取得）を待つ

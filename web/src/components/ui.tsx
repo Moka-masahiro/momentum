@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { deltaClass, num, pct, signed } from "../format";
-import type { Rank } from "../types";
+import type { Rank, Why } from "../types";
 
 /* ---------- アイコン（線画。currentColor で色を継ぐ） ---------- */
 
@@ -75,6 +75,32 @@ export function rankOf(score: number | null | undefined): Rank | null {
   if (score >= 55) return "B";
   if (score >= 40) return "C";
   return "D";
+}
+
+/* ---------- 値動きの理由 ---------- */
+
+export const WHY_LABEL: Record<Why, string> = {
+  news: "ニュース",
+  supply: "需給",
+  market: "地合い",
+  unknown: "材料不明",
+};
+
+/** 値動きの理由のラベル。理由の無い日（目立った動きが無い）は何も出さない */
+export function WhyChip({ why, className = "" }: { why: Why | null | undefined; className?: string }) {
+  if (!why || !WHY_LABEL[why]) return null;
+  return <span className={`why why-${why} ${className}`}>{WHY_LABEL[why]}</span>;
+}
+
+/** 一覧の2行目に添える理由（ラベルと短い文言。文言は長ければ省略） */
+export function WhyNote({ row, text = true }: { row: { why?: Why | null; why_text?: string | null }; text?: boolean }) {
+  if (!row.why) return null;
+  return (
+    <>
+      <WhyChip why={row.why} />
+      {text && row.why_text && <span className="why-text">{row.why_text}</span>}
+    </>
+  );
 }
 
 /* ---------- 数値 ---------- */
@@ -219,7 +245,7 @@ export function Seg<T extends string>({ value, options, onChange }: { value: T; 
 export function Disclaimer() {
   return (
     <p className="note mt-4 px-1">
-      価格は yfinance（無料・非公式）の日足で、リアルタイムではありません。指標とシグナルは決まったルールで機械的に計算した参考情報で、売買の推奨ではありません。実績の数字は過去約2年分の日足による検証結果で、将来も同じになるとは限りません。データは平日の夕方に GitHub Actions が自動で作り直しています。
+      価格は yfinance（無料・非公式）の日足で、リアルタイムではありません。指標とシグナルは決まったルールで機械的に計算した参考情報で、売買の推奨ではありません。実績の数字は過去約2年分の日足による検証結果で、将来も同じになるとは限りません。値動きの理由は、会社の適時開示（やのしん TDnet WEB-API 経由）と JPX の公表データから機械的に付けた手がかりで、原因の証明ではありません。データは平日の夕方に GitHub Actions が自動で作り直しています。
       チャート: <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer" className="underline">TradingView Lightweight Charts™</a>
     </p>
   );

@@ -190,6 +190,28 @@ button.tile:active,
 .chip-warn { color: var(--warn); border-color: rgba(240, 180, 76, 0.45); }
 .chip-on { background: rgba(79, 200, 238, 0.16); color: var(--text-1); border-color: var(--accent); }
 
+/* --- 値動きの理由のラベル ---
+ * 上昇=赤・下落=青と取り違えないよう、赤と青は使わない。文字は面に対して 5.7:1 以上
+ * （薄く出す「定例」は 4.4:1 以上。どちらもカード・タイルの面で計算した値）。
+ * 材料不明は「分からない」ことが伝わるよう、塗らずに点線の枠だけにする */
+.why {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+.why-news { color: #bcb5ff; background: rgba(160, 150, 255, 0.14); border-color: rgba(160, 150, 255, 0.5); }
+.why-supply { color: #ffbe78; background: rgba(255, 170, 90, 0.13); border-color: rgba(255, 170, 90, 0.5); }
+.why-market { color: #8fdcc8; background: rgba(120, 210, 190, 0.12); border-color: rgba(120, 210, 190, 0.45); }
+.why-unknown { color: var(--text-2); background: transparent; border-color: var(--line-strong); border-style: dashed; }
+.why-routine { color: var(--text-3); background: transparent; border-color: rgba(120, 200, 230, 0.2); }
+
 /* --- 一覧 --- */
 .list-head {
   display: grid;
@@ -224,6 +246,22 @@ button.tile:active,
   text-overflow: ellipsis;
 }
 .list-name small { font-size: 11px; color: var(--text-3); }
+/* 2行目に理由のラベルを並べる行（長い文言は省略して1行に収める） */
+.list-name small.list-sub {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+.why-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
 .list-val { font-size: 18px; font-weight: 700; text-align: right; }
 
 /* --- セグメント切り替え --- */

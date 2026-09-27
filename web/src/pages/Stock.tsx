@@ -3,11 +3,11 @@ import { api, invalidate, paths, useData } from "../data";
 import { setWatched } from "../watch";
 import Radar from "../components/Radar";
 import StockChart from "../components/StockChart";
-import { Card, Delta, Disclaimer, ErrorBox, Icon, Loading, RankBadge, Sheet } from "../components/ui";
-import { mdDate, num, pct, signed, yen, yenLarge } from "../format";
+import { Card, Delta, Disclaimer, ErrorBox, Icon, Loading, RankBadge, Sheet, WhyChip } from "../components/ui";
+import { mdDate, mdTime, num, pct, signed, yen, yenLarge } from "../format";
 import { METRICS, RANK_TEXT, type MetricInfo } from "../metrics";
 import { back, go, rememberStock } from "../router";
-import type { Report, StockDetail, StockSignal } from "../types";
+import type { Disclosure, Reason, Report, StockDetail, StockSignal } from "../types";
 
 export default function Stock({ code }: { code: string }) {
   const { data, error, loading, reload } = useData<StockDetail>(paths.stock(code), () => api.stock(code));
@@ -45,6 +45,7 @@ export default function Stock({ code }: { code: string }) {
       {data && (
         <div className={loading ? "fade-stale" : ""}>
           <Summary d={data} />
+          <ReasonCard d={data} />
           <MetricsCard d={data} onOpen={setSheet} />
           <RadarCard d={data} />
           <Card icon="trend" title="モメンタム度推移 × 日足" guide="chart" sub="上段=株価、下段=モメンタム度（0〜100）。指で触れた日の値が上に出ます">
@@ -124,6 +125,155 @@ function Summary({ d }: { d: StockDetail }) {
         <p className="note mt-2 t-warn">最新日は売買が成立していません。{mdDate(d.last_date)} 時点の値です。</p>
       )}
     </Card>
+  );
+}
+
+/* ---------- 値動きの理由 ---------- */
+
+const KIND_CLASS: Record<Disclosure["kind"], string> = { news: "why-news", supply: "why-supply", routine: "why-routine" };
+
+/** 判定の中身を1〜2文で。数字はその日のデータから作る（固定の文面にしない） */
+function reasonSentence(r: Reason): string {
+  if (r.ret == null) return "最新日は売買が成立していないため、判定していません。";
+  const move = `業種平均との差 ${pct(r.idio)}`;
+  const why = r.z != null && Math.abs(r.z) >= 3
+    ? `（普段の${num(Math.abs(r.z), 1)}倍）`
+    : r.vr != null && r.vr >= 3 ? `（出来高は20日平均の${num(r.vr, 1)}倍）` : "";
+  if (r.notable && !r.checked) {
+    return `目立って動きました（${move}）が、開示を取得できなかった日を含むため、理由を判定していません。`;
+  }
+  switch (r.label) {
+    case "news":
+      return `業種平均より ${pct(r.idio)} 動きました${why}。前の取引日の引け後から当日の引けまでに、会社の開示がありました。`;
+    case "supply":
+      return r.disclosures.some((x) => x.kind === "supply")
+        ? `業種平均より ${pct(r.idio)} 動きました${why}。増資・自社株買いなど、株の需給に関わる開示がありました。`
+        : `業種平均より ${pct(r.idio)} 動きました${why}。開示はありませんが、需給の手がかりがあります。`;
+    case "market":
+      return r.clues.some((c) => c.key === "group")
+        ? `業種平均より ${pct(r.idio)} 動きました${why}。開示はありませんが、同じ業種の他の銘柄もそろって同じ向きに動いた日です。`
+        : `${r.sector ?? "業種"}全体が ${pct(r.sector_ret)} 動いた日で、この銘柄だけの動きは目立ちません（${move}）。`;
+    case "unknown":
+      return `業種平均より ${pct(r.idio)} 動きました${why}が、開示も需給の手がかりも見当たりません。新聞報道やテーマ買いなど、ここでは拾えない理由の可能性があります。`;
+    default:
+      return `目立った動きはありません（${move}・出来高は20日平均の${num(r.vr, 1)}倍）。`;
+  }
+}
+
+function ReasonCard({ d }: { d: StockDetail }) {
+  const r = d.reason;
+  if (!r) return null; // 値動きの理由を作れなかった日・古いデータ
+  // 判定に効いた順に並んでいる（reasons.py）。多い日は上から3件だけ出し、残りは下の一覧で見る
+  const relevant = r.disclosures.filter((x) => x.kind !== "routine");
+  const shown = relevant.slice(0, 3);
+  return (
+    <Card icon="pulse" guide="reason" aside={mdDate(r.date)}
+      title={<span className="flex items-center gap-2">値動きの理由<WhyChip why={r.label} /></span>}>
+      <p className="text-[13.5px] leading-relaxed">{reasonSentence(r)}</p>
+
+      {shown.length > 0 && (
+        <div className="mt-2 space-y-1.5">
+          {shown.map((x) => (
+            <div key={x.time + x.title} className="tile !py-2">
+              <div className="flex items-center gap-1.5 text-[11.5px] t-3">
+                <span className="num">{mdTime(x.time)}</span>
+                <span className={`why ${KIND_CLASS[x.kind]}`}>{x.category}</span>
+              </div>
+              <DisclosureTitle x={x} className="text-[13px] mt-1 leading-snug" />
+            </div>
+          ))}
+          {relevant.length > shown.length && (
+            <p className="note">ほか {relevant.length - shown.length} 件は、下の「直近30日の開示」にあります。</p>
+          )}
+        </div>
+      )}
+      {r.clues.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {r.clues.map((c) => (
+            <li key={c.key} className="text-[13px] leading-snug t-1">・{c.text}</li>
+          ))}
+        </ul>
+      )}
+
+      <table className="tbl mt-3">
+        <tbody>
+          <tr><td>当日の騰落率</td><td><Delta v={r.ret} digits={2} /></td></tr>
+          <tr><td>業種（{r.sector ?? "—"}）の中央値</td><td><Delta v={r.sector_ret} /></td></tr>
+          <tr><td>市場全体の中央値</td><td><Delta v={r.market_ret} /></td></tr>
+          <tr><td>出来高（20日平均比）</td><td>{r.vr != null ? `${num(r.vr, 1)}倍` : "—"}</td></tr>
+          <tr>
+            <td>機関の空売り残高</td>
+            <td style={{ whiteSpace: "normal" }}>
+              {r.short ? `${num(r.short.now, 2)}%（前回 ${num(r.short.prev, 2)}%・${r.short.holders}社）` : "報告なし"}
+            </td>
+          </tr>
+          <tr><td>逆日歩</td><td>{r.premium ? `${num(r.premium.rate, 2)}円` : "なし"}</td></tr>
+          <tr><td>信用取引の規制など</td><td style={{ whiteSpace: "normal" }}>{r.flags.length ? r.flags.join("・") : "なし"}</td></tr>
+        </tbody>
+      </table>
+      <p className="note mt-2">
+        ニュースは会社の適時開示だけで、新聞報道・アナリストの格付け・テーマ買いは含みません。
+        需給の手がかりは状況証拠で、原因の証明ではありません。
+        機関の空売り残高は、発行済株式の0.5%以上を空売りしている機関の報告分{r.short ? `（${mdDate(r.short.date)} 計算分まで）` : ""}。
+        逆日歩は権利取りの時期に優待目当てでも付くため、判定には使わず表示だけにしています。
+      </p>
+      <DisclosureList items={d.disclosures ?? []} />
+    </Card>
+  );
+}
+
+function DisclosureTitle({ x, className = "" }: { x: Disclosure; className?: string }) {
+  const tone = x.kind === "routine" ? "t-3" : "t-1";
+  if (!x.url) return <div className={`${className} ${tone}`}>{x.title}</div>;
+  return (
+    <a className={`${className} ${tone} block underline decoration-dotted underline-offset-2`} href={x.url} target="_blank" rel="noreferrer">
+      {x.title}
+    </a>
+  );
+}
+
+function DisclosureList({ items }: { items: Disclosure[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, 5);
+  return (
+    <div className="mt-4">
+      <div className="text-[13px] font-bold">直近30日の開示</div>
+      {items.length === 0 ? (
+        <p className="note mt-1">直近30日の開示はありません。</p>
+      ) : (
+        <>
+          <div className="note">右はその開示が効いた取引日の騰落率（かっこ内は業種平均との差）。表題を押すと TDnet の PDF が開きます（公開から31日で消えます）。</div>
+          {shown.map((x) => (
+            <div key={x.time + x.title} className="grid gap-x-3 py-2 border-t border-[rgba(120,200,230,0.08)] first:border-t-0"
+              style={{ gridTemplateColumns: "minmax(0,1fr) auto" }}>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-[11.5px] t-3">
+                  <span className="num">{mdTime(x.time)}</span>
+                  <span className={`why ${KIND_CLASS[x.kind]}`}>{x.category}</span>
+                </div>
+                <DisclosureTitle x={x} className="text-[12.5px] mt-1 leading-snug" />
+              </div>
+              <div className="text-right text-[12px] whitespace-nowrap">
+                {x.day ? (
+                  <>
+                    <div className="note !text-[10.5px]">{mdDate(x.day)}</div>
+                    <div className="font-semibold"><Delta v={x.ret} /></div>
+                    <div className="text-[10.5px] t-3 num">（{pct(x.idio)}）</div>
+                  </>
+                ) : (
+                  <span className="note">次の取引日</span>
+                )}
+              </div>
+            </div>
+          ))}
+          {items.length > 5 && (
+            <button className="btn-ghost w-full mt-2 text-[13px]" onClick={() => setAll(!all)}>
+              {all ? "閉じる" : `すべて表示（${items.length}件）`}
+            </button>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

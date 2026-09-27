@@ -1,5 +1,5 @@
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, RankBadge } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, WhyNote } from "../components/ui";
 import { num, yen } from "../format";
 import { back, go } from "../router";
 import type { Home } from "../types";
@@ -28,7 +28,13 @@ export default function Watchlist() {
               <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr 70px 52px 52px 34px" }} onClick={() => go(`stock/${r.code}`)}>
                 <span className="list-name">
                   <b>{r.name}</b>
-                  <small>{r.code} · モメンタム度 {num(r.score)}{r.position ? ` · ${num(r.position)}位` : ""}</small>
+                  <small className="list-sub">
+                    {r.why ? (
+                      <><span>{r.code}</span><WhyNote row={r} /></>
+                    ) : (
+                      <span>{r.code} · モメンタム度 {num(r.score)}{r.position ? ` · ${num(r.position)}位` : ""}</span>
+                    )}
+                  </small>
                 </span>
                 <span className="text-right text-[13px] num">{yen(r.close)}</span>
                 <span className="text-right text-[12px]"><Delta v={r.chg1} /></span>
