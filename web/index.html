@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- 自分用のアプリなので検索エンジンには載せない（中身は合言葉で暗号化してある） -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#081820" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="モメンタム" />
+    <title>モメンタム</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="./icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <style>
+      /* JSが動かなかった場合に真っ暗な画面にならないようにする */
+      html, body { background: #081820; }
+      #boot { color: #a9c3cf; font-family: system-ui, sans-serif; padding: 24px; line-height: 1.7; }
+      #boot-error {
+        display: none; color: #fca5a5; white-space: pre-wrap; word-break: break-all;
+        font-size: 13px; margin-top: 12px; border: 1px solid #7f1d1d; border-radius: 8px; padding: 12px;
+      }
+    </style>
+    <script>
+      (function () {
+        function show(msg) {
+          var el = document.getElementById("boot-error");
+          if (!el) return;
+          el.style.display = "block";
+          el.textContent = String(msg);
+          var s = document.getElementById("boot-status");
+          if (s) s.textContent = "読み込みに失敗しました";
+        }
+        window.addEventListener("error", function (e) {
+          show((e.message || "エラー") + "\n" + (e.filename || "") + ":" + (e.lineno || ""));
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          show("未処理のPromise: " + ((e.reason && e.reason.message) || e.reason));
+        });
+        setTimeout(function () {
+          var root = document.getElementById("root");
+          if (root && root.querySelector("#boot")) {
+            var s = document.getElementById("boot-status");
+            if (s) s.textContent = "10秒待っても画面が出ませんでした（ブラウザ非対応の可能性）";
+          }
+        }, 10000);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root">
+      <div id="boot">
+        <div id="boot-status">モメンタムを読み込み中…</div>
+        <div id="boot-error"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

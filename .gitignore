@@ -1,0 +1,12 @@
+# Python
+pipeline/.venv/
+__pycache__/
+pipeline/cache/
+# 手元の確認用の合言葉（本番の合言葉は GitHub の secret にだけ置く）
+pipeline/.passphrase.local
+
+# Web
+web/node_modules/
+web/dist/
+# 毎日作り直すデータ（GitHub Pages には Actions から直接置く。リポジトリには入れない）
+web/public/data/

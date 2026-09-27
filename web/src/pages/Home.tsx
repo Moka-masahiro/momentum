@@ -1,0 +1,226 @@
+import { useState } from "react";
+import { api, paths, useData } from "../data";
+import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, Disclaimer } from "../components/ui";
+import Spark from "../components/Spark";
+import { num, pct, slashDate, yen } from "../format";
+import { flag, go, setFlag } from "../router";
+import type { Home as HomeData, StockRow } from "../types";
+
+export default function Home({ onGuide }: { onGuide: () => void }) {
+  const { data, error, loading, reload } = useData<HomeData>(paths.home, api.home);
+  const [welcome, setWelcome] = useState(() => !flag("m_welcome_done"));
+
+  return (
+    <div>
+      <header className="flex items-center justify-between py-2 mb-2">
+        <div className="flex items-center gap-2.5">
+          <Logo />
+          <div>
+            <div className="text-[21px] font-extrabold leading-tight tracking-wide">モメンタム</div>
+            <div className="note !text-[11px]">自分用・日本株</div>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="note !text-[11px]">データ日付</div>
+          <div className="text-[17px] font-bold num">{data ? slashDate(data.as_of) : "—"}</div>
+        </div>
+      </header>
+
+      {welcome && (
+        <div className="card mb-3" style={{ borderColor: "rgba(232,199,111,0.5)" }}>
+          <div className="flex items-start gap-3">
+            <span className="t-gold mt-0.5"><Icon name="guide" size={22} /></span>
+            <div className="flex-1">
+              <div className="font-bold">はじめに</div>
+              <p className="prose !text-[13px] mt-1">
+                全銘柄の日足から、いまの勢い（モメンタム）と需給を機械的に計算して並べるアプリです。
+                画面の見方は右下のガイドからいつでも確認できます。
+              </p>
+              <div className="flex gap-2 mt-3">
+                <button className="btn-primary" onClick={() => { setFlag("m_welcome_done"); setWelcome(false); onGuide(); }}>
+                  使い方ガイドを見る
+                </button>
+                <button className="btn-ghost" onClick={() => { setFlag("m_welcome_done"); setWelcome(false); }}>
+                  閉じる
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loading && !data && <Loading label="全銘柄の指標を読み込み中…" slow />}
+      {error && !data && <ErrorBox message={error} onRetry={reload} />}
+      {data && (
+        <div className={loading ? "fade-stale" : ""}>
+          <MarketCard data={data} />
+          <RankingCard rows={data.ranking} universe={data.universe} />
+          <SignalCard data={data} />
+          <WatchCard rows={data.watchlist} />
+          <Card icon="flask" title="この数字は当たる？" link="検証を見る" onLink={() => go("verify")} guide="verify-home">
+            <p className="prose !text-[13px]">
+              モメンタム度やシグナルが、その後に市場平均を上回ったかを毎日検証しています。
+              <VerifyLine v={data.verify_summary} />
+            </p>
+          </Card>
+          <button className="card w-full flex items-center justify-between !py-3 text-left" onClick={() => go("settings")}>
+            <span className="flex items-center gap-2 t-2 font-semibold"><Icon name="gear" size={18} />設定・データの状態</span>
+            <Icon name="chev" size={18} />
+          </button>
+          <Disclaimer />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VerifyLine({ v }: { v: HomeData["verify_summary"] | undefined }) {
+  if (!v) return null; // 古いデータには要約が無い
+  const period = v.from ? `（${slashDate(v.from)}〜${slashDate(v.to)}、${num(v.days)}営業日）` : "";
+  if (v.metrics_significant === 0 && v.signals_significant === 0) {
+    return <b>いまのところ、{v.metrics}つの指標も{v.signals}種類のシグナルも、統計的に有意な差はありません{period}。</b>;
+  }
+  return (
+    <b>
+      {v.metrics}つの指標のうち{v.metrics_significant}つ、{v.signals}種類のシグナルのうち{v.signals_significant}種類に、
+      一部の期間で有意な差がありました{period}。
+    </b>
+  );
+}
+
+function Logo() {
+  return (
+    <svg width="38" height="38" viewBox="0 0 64 64" aria-hidden="true">
+      <defs>
+        <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#1f6fb8" />
+          <stop offset="1" stopColor="#123a66" />
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#lg)" stroke="rgba(120,200,230,0.5)" />
+      <path d="M13 45l13-13 8 7 16-19" stroke="#8ef0c8" strokeWidth="6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M41 19h10v10" stroke="#8ef0c8" strokeWidth="6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function Stat({ label, sub, score, rank }: { label: string; sub?: string; score: number | null | undefined; rank: StockRow["rank"] }) {
+  return (
+    <div className="text-center">
+      <div className="text-[13px] font-semibold t-1">{label}</div>
+      <div className="note !text-[10px] -mt-0.5 mb-1">{sub ?? " "}</div>
+      <div className="inline-flex items-center gap-1.5">
+        <span className="text-[22px] font-bold">{num(score)}</span>
+        <RankBadge rank={rank} />
+      </div>
+    </div>
+  );
+}
+
+function MarketCard({ data }: { data: HomeData }) {
+  const m = data.market;
+  const seg = (name: string) => m.segments.find((s) => s.name === name);
+  const prime = seg("プライム");
+  const growth = seg("グロース");
+  return (
+    <Card icon="bars" title="地合い" link="詳細を見る" onLink={() => go("market")} guide="market">
+      <div className="grid grid-cols-3 gap-2">
+        <Stat label="日経平均" sub="指数そのもの" score={m.nikkei?.score} rank={m.nikkei?.rank ?? null} />
+        <Stat label="プライム" sub="全銘柄の中央値" score={prime?.median} rank={prime?.rank ?? null} />
+        <Stat label="グロース" sub="全銘柄の中央値" score={growth?.median} rank={growth?.rank ?? null} />
+      </div>
+      <div className="tile mt-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[12px] t-2">ランクB以上の銘柄</div>
+          <div className="text-[20px] font-bold">{num(m.breadth.b_plus, 1)}<span className="text-[13px] t-2 ml-0.5">%</span></div>
+          <div className="note !text-[11px]">
+            {m.breadth.b_plus_percentile != null ? `記録のある日の ${num(m.breadth.b_plus_percentile)}% より広い` : ""}
+          </div>
+        </div>
+        <div className="text-right">
+          <Spark series={m.breadth_spark} domain={[0, 100]} />
+          <div className="note !text-[10px]">直近60日</div>
+        </div>
+      </div>
+      {m.nikkei && (
+        <div className="note mt-2">
+          日経平均 {num(m.nikkei.close)} <Delta v={m.nikkei.change_pct} digits={2} />（{slashDate(m.nikkei.date)}）
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function RankingCard({ rows, universe }: { rows: StockRow[]; universe: number }) {
+  return (
+    <Card icon="trend" title="モメンタム度ランキング" link="TOP 50 を見る" onLink={() => go("ranking")} guide="ranking"
+      sub={`売買代金20日平均5,000万円以上の ${num(universe)} 銘柄から`}>
+      <div className="list-head"><span>順位</span><span>銘柄名</span><span className="text-right">モメンタム度</span><span className="text-center">ランク</span></div>
+      {rows.map((r) => (
+        <button key={r.code} className="list-row" onClick={() => go(`stock/${r.code}`)}>
+          <span className="list-pos">#{r.position}</span>
+          <span className="list-name">
+            <b>{r.name}</b>
+            <small>{r.code} · 1か月 <span className={r.chg20 != null && r.chg20 >= 0 ? "t-up" : "t-down"}>{pct(r.chg20)}</span></small>
+          </span>
+          <span className="list-val">{num(r.score)}</span>
+          <span className="text-center"><RankBadge rank={r.rank} /></span>
+        </button>
+      ))}
+    </Card>
+  );
+}
+
+function SignalCard({ data }: { data: HomeData }) {
+  const s = data.signals;
+  return (
+    <Card icon="bolt" title="シグナル" link="一覧を見る" onLink={() => go("signals")} guide="signals-home">
+      <div className="flex items-baseline gap-2">
+        <span className="t-2 text-[13px]">本日</span>
+        <span className="text-[30px] font-extrabold t-accent leading-none">{num(s.total)}</span>
+        <span className="t-2 text-[13px]">件（流動性あり {num(s.liquid)} 件）</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 mt-3">
+        {s.by_type.map((t) => (
+          <button key={t.key} className="tile pressable" onClick={() => go("signals")}>
+            <div className="flex items-center justify-between">
+              <span className={`text-[13px] font-semibold ${t.tone === "warn" ? "t-warn" : "t-1"}`}>{t.label}</span>
+              <span className="text-[15px] font-bold num">{t.count}</span>
+            </div>
+            <div className="note !text-[10.5px] mt-0.5">
+              20日後 市場比 <span className="t-2 num">{pct(t.excess20, 2)}</span> · 勝率 <span className="t-2 num">{num(t.win20)}%</span>
+            </div>
+          </button>
+        ))}
+      </div>
+      <p className="note mt-2">
+        「市場比」は同じ期間の全銘柄平均との差、「勝率」は市場平均に勝った割合（これまでの実績・流動性のある銘柄）。
+        {data.verify_summary == null
+          ? ""
+          : data.verify_summary.signals_significant === 0
+            ? "どのシグナルも、偶然と区別できる差はありません。"
+            : `${data.verify_summary.signals_significant} 種類のシグナルに、偶然とは言いにくい差があります（検証画面）。`}
+      </p>
+    </Card>
+  );
+}
+
+function WatchCard({ rows }: { rows: StockRow[] }) {
+  return (
+    <Card icon="star" title="ウォッチリスト" link={`登録 ${rows.length} 件`} onLink={() => go("watchlist")} guide="watch">
+      {rows.length === 0 && <p className="note">銘柄詳細の ☆ で追加できます（この端末の中に保存されます）。</p>}
+      {rows.map((r) =>
+        r.missing ? (
+          <div key={r.code} className="list-row"><span className="t-3 text-[12px]">{r.code}</span><span className="t-3 text-[12px]">日足なし</span><span /><span /></div>
+        ) : (
+          <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr auto auto 40px" }} onClick={() => go(`stock/${r.code}`)}>
+            <span className="list-name"><b>{r.name}</b><small>{r.code}</small></span>
+            <span className="text-right text-[13px] num">{yen(r.close)}</span>
+            <span className="text-right text-[12px] w-[52px]"><Delta v={r.chg1} /></span>
+            <span className="text-center"><RankBadge rank={r.rank} /></span>
+          </button>
+        ),
+      )}
+    </Card>
+  );
+}
