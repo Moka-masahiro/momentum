@@ -190,6 +190,9 @@ def test_ex_rights_day_is_second_to_last_trading_day():
     upto = dates[dates <= "2026-09-25"]
     assert not rsn.is_ex_rights(pd.Timestamp("2026-09-25"), upto)
     assert not rsn.is_ex_rights(pd.Timestamp("2026-08-28"), pd.bdate_range("2026-08-01", "2026-08-31"))
+    # 権利付き最終日は権利落ち日の前の取引日（2026-09-28）。9/28 時点では 9/29・9/30 はまだデータに無い
+    assert rsn.is_last_with_rights(pd.Timestamp("2026-09-28"), dates[dates <= "2026-09-28"])
+    assert not rsn.is_last_with_rights(pd.Timestamp("2026-09-25"), upto)
 
 
 def test_parse_short_positions_by_header_names():
@@ -318,6 +321,53 @@ def test_window_disclosures_put_the_main_reason_first():
     ordered = sorted(items.itertuples(), key=rsn._importance)
     assert ordered[0].category == "増資・売出し" and ordered[-1].kind == "routine"
     assert rsn._headline(items) == "転換社債の発行"
+
+
+def test_parse_margin_lines_rejoins_split_numbers():
+    # JPX「銘柄別信用取引残高」の PDF から取り出した行（2026-09-25 申込み分の実例）。数字の途中に空白が入る
+    lines = [
+        # "▲ 2,1 00" は ▲2,100（一般信用の買い残の前日比）
+        "B 極洋　普通株式 プライム 貸 13010 JP3257200000 株数 Shs. 9,300 300 0.1% 154,300 ▲ 3,900 1.3% "
+        "0 0 9,300 300 35,400 ▲ 2,1 00 118,900 ▲ 1,800",
+        # "2 4,900" は 24,900（2 と 4,900 に分けると足し算が合わない）
+        "B サカタのタネ　普通株式 プライム 貸 13770 JP3315000004 株数 Shs. 18,600 600 0.0% 43,200 300 0.1% "
+        "12,100 0 6,500 600 18,300 400 2 4,900 ▲ 100",
+        # 上場直後で前日比が「-」
+        "B Ｘ社　普通株式 グロース 制 634A0 JP3000000000 株数 Shs. 0 - 0.0% 272,900 - 9.6% 0 - 0 - 272,900 - 0 -",
+        # 小計の行は読まない
+        "グロース 小計 597 銘柄 株数 Shs. 37,230,800 ▲ 1,464,700 - 705,563,300 196,200 -",
+        # 足し算が合わない行は読まない（買い残 1,000 ≠ 一般 300 + 制度 800）
+        "B Ｙ社　普通株式 プライム 貸 99990 JP3999999999 株数 Shs. 0 0 0.0% 1,000 0 0.1% 0 0 0 0 300 0 800 0",
+        # 外国企業の株（ISIN が JP 以外）も読む。最初は JP だけにしていて取りこぼした
+        "B メディシノバ・インク　普通株式 スタンダード 制 48750 US58468P2065 株数 Shs. 0 ▲ 100 0.0% 129,100 ▲ 5,400 0.3% "
+        "0 ▲ 100 0 0 70,000 ▲ 5,000 59,100 ▲ 400",
+        # 社債型種類株式（コードの末尾が0以外）は読まない
+        "B ソフトバンク株式会社第１回社債型種類株式 プライム 制 94345 JP3732000108 株数 Shs. 0 0 0.0% 0 0 0.0% 0 0 0 0 0 0 0 0",
+    ]
+    df = fetch.parse_margin_lines(lines).set_index("code")
+    assert sorted(df.index) == ["1301", "1377", "4875", "634A"]
+    assert (df.at["1301", "buy"], df.at["1301", "buy_chg"], df.at["1301", "buy_ratio"]) == (154300, -3900, 1.3)
+    assert (df.at["1377", "buy"], df.at["1377", "buy_chg"]) == (43200, 300)
+    assert df.at["634A", "buy"] == 272900 and pd.isna(df.at["634A", "buy_chg"])
+
+
+def test_heavy_short_interest_is_a_supply_clue_on_an_up_move():
+    p, base, disc, days, last = _reason_panel()
+    margin = pd.DataFrame([
+        # 1001（開示なしで +15%）: 売り残が出来高（1万株/日）の2日分 → 踏み上げの手がかり
+        {"code": "1001", "sell": 20000, "sell_chg": 0, "sell_ratio": 0.1, "buy": 30000, "buy_chg": 0, "buy_ratio": 0.2},
+        # 1000（開示ありで +15%）: 信用残が重くても、開示があればニュースのまま
+        {"code": "1000", "sell": 50000, "sell_chg": 0, "sell_ratio": 0.3, "buy": 90000, "buy_chg": 0, "buy_ratio": 0.5},
+    ])
+    ex = rsn.Extras(disclosures=disc, disclosure_days=days, margin=margin, margin_date="2026-08-27")
+    rs = rsn.compute(p, base, ex, last + pd.Timedelta(hours=17))
+    assert rs.latest.at["1001", "why"] == "supply" and rs.latest.at["1001", "why_text"] == "売り残が多い（踏み上げ）"
+    assert rs.latest.at["1000", "why"] == "news"
+    assert rs.detail["1001"]["margin"]["sell_days"] == 2.0 and rs.detail["1001"]["margin"]["ratio"] == 1.5
+    # 買い残がずっと多い（買い長）なら、売り残が多くても踏み上げとは言わない（アツギ 2026-09-28: 信用倍率5.37倍）
+    ex.margin = margin.assign(buy=[110000, 90000])      # 1001 の信用倍率 5.5倍
+    rs = rsn.compute(p, base, ex, last + pd.Timedelta(hours=17))
+    assert rs.latest.at["1001", "why"] == "unknown"
 
 
 def test_short_clue_uses_only_recent_reports():

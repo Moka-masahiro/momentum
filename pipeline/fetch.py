@@ -182,11 +182,17 @@ TDNET_API = "https://webapi.yanoshin.jp/webapi/tdnet/list/{day}.json?limit=5000"
 TDNET_PAUSE = 0.3
 TDNET_PDF = "https://www.release.tdnet.info/inbs/"
 
-# JPX の公表ファイル（どれも Excel。ページからその時点のリンクを探す）
+# JPX の公表ファイル（ページからその時点のリンクを探す）
 SHORT_PAGE = "https://www.jpx.co.jp/markets/public/short-selling/index.html"       # 空売り残高（毎日）
-FLAGS_PAGE = "https://www.jpx.co.jp/markets/statistics-equities/margin/index.html"  # 日々公表銘柄等（毎日）
-PREMIUM_PAGE = "https://www.jpx.co.jp/markets/statistics-equities/margin/01.html"   # 品貸料＝逆日歩（毎日）
 SHORT_FILES = 5    # 空売り残高は「その日に届いた報告」だけが載るので、数日分を合わせて見る
+# 信用取引残高等のページ群。2026-09-28 の公表形式の変更でページ番号が振り直された
+# （品貸料が 01 → 02 に移り、その日の逆日歩が取れなかった）。番号に頼らず、ファイル名で探す
+MARGIN_PAGES = tuple(f"https://www.jpx.co.jp/markets/statistics-equities/margin/{p}.html"
+                     for p in ("index", "01", "02", "03", "04", "05"))
+FLAGS_FILE = r"(?:\d{8}_mtdaily|mtdailyk\d+)\.xlsx?"   # 日々公表銘柄等信用取引残高（毎日・Excel）
+PREMIUM_FILE = r"Premium_Charges\.xlsx?"               # 品貸料＝逆日歩（毎日・Excel）
+MARGIN_FILE = r"\d{8}_mtall\.pdf"                      # 銘柄別信用取引残高（全銘柄・毎日・PDF のみ）
+MIN_MARGIN_ROWS = 3000     # これより少なく読めたら形式が変わったとみなして使わない（2026-09-25 分は 4,254 行）
 
 
 def code4(v) -> str | None:
@@ -264,6 +270,25 @@ def _jpx_links(page: str, pattern: str, timeout: int) -> list[str]:
     return [h if h.startswith("http") else "https://www.jpx.co.jp" + h for h in links]
 
 
+def _jpx_find(pattern: str, timeout: int) -> list[str]:
+    """信用取引残高等のページを順に見て、ファイル名が pattern に合うリンクを返す（新しい日付を先に）。"""
+    for page in MARGIN_PAGES:
+        try:
+            links = _jpx_links(page, pattern, timeout)
+        except Exception as e:
+            logger.warning("JPX page %s failed: %s", page, e)
+            continue
+        if links:
+            return sorted(links, key=lambda u: re.findall(r"\d{8}", u.rsplit("/", 1)[-1]) or [""], reverse=True)
+    return []
+
+
+def _file_date(url: str) -> str | None:
+    """ファイル名の先頭の日付（20260925_mtall.pdf → 2026-09-25）。JPX の新形式では申込日。"""
+    m = re.match(r"(\d{4})(\d{2})(\d{2})_", url.rsplit("/", 1)[-1])
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
+
+
 def _excel(url: str, timeout: int) -> pd.DataFrame:
     return pd.read_excel(io.BytesIO(_get(url, timeout)), header=None, dtype=str)
 
@@ -321,14 +346,14 @@ def parse_short_positions(raw: pd.DataFrame) -> pd.DataFrame:
 def fetch_margin_flags(timeout: int = 60) -> tuple[pd.DataFrame, str | None]:
     """信用取引の規制・日々公表などの対象銘柄（JPX「日々公表銘柄等信用取引残高」）。
 
-    戻り値は (列 code, flags の表, 申込日)。2026-09-28 に表題と形式（.xls → .xlsx）が変わるが、
-    データ部分は変わらないと告知されている。列の位置に頼らず、ISIN の手前の列から読む。
+    戻り値は (列 code, flags の表, 申込日)。2026-09-28 に表題と形式（.xls → .xlsx）が変わったが、
+    データ部分は同じ（新形式の初回 9/25 申込み分も同じ読み方で読めた）。列の位置に頼らず、ISIN の手前の列から読む。
     """
-    links = _jpx_links(FLAGS_PAGE, r"\.xlsx?", timeout)
+    links = _jpx_find(FLAGS_FILE, timeout)
     if not links:
         raise RuntimeError("日々公表銘柄等のファイルが見つかりません")
     raw = _excel(links[0], timeout)
-    return parse_margin_flags(raw), _as_of(raw)
+    return parse_margin_flags(raw), _file_date(links[0]) or _as_of(raw)
 
 
 FLAG_CHARS = set("規日監株喚○")
@@ -362,10 +387,111 @@ def parse_margin_flags(raw: pd.DataFrame) -> pd.DataFrame:
 
 def fetch_premium(timeout: int = 60) -> pd.DataFrame:
     """品貸料（逆日歩）。列: code, date, rate（1株1日あたりの円）, max_rate"""
-    links = _jpx_links(PREMIUM_PAGE, r"Premium_Charges\.xlsx?", timeout)
+    links = _jpx_find(PREMIUM_FILE, timeout)
     if not links:
         raise RuntimeError("品貸料のファイルが見つかりません")
     return parse_premium(_excel(links[0], timeout))
+
+
+def fetch_margin_all(timeout: int = 120) -> tuple[pd.DataFrame, str | None]:
+    """全銘柄の信用取引残高（JPX「銘柄別信用取引残高」。2026-09-28 から毎日・PDF のみ）。
+
+    戻り値は (表, 申込日)。表の列: code, sell, sell_chg, sell_ratio, buy, buy_chg, buy_ratio
+    （株数。ratio は上場株式数に対する%。前日比が無い日は None）。PDF の読み取りに約40秒かかる。
+    """
+    links = _jpx_find(MARGIN_FILE, timeout)
+    if not links:
+        raise RuntimeError("銘柄別信用取引残高のファイルが見つかりません")
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(_get(links[0], timeout)))
+    lines = [line for page in reader.pages for line in (page.extract_text() or "").splitlines()]
+    df = parse_margin_lines(lines)
+    if len(df) < MIN_MARGIN_ROWS:
+        raise RuntimeError(f"銘柄別信用取引残高を {len(df)} 行しか読めませんでした（形式が変わった可能性）")
+    logger.info("margin balances: %d issues (%s)", len(df), _file_date(links[0]))
+    return df, _file_date(links[0])
+
+
+# 株数の行の14項目: 売残, 前日比, 上場比, 買残, 前日比, 上場比, 一般信用の売残, 前日比, 制度信用の売残, 前日比,
+# 一般信用の買残, 前日比, 制度信用の買残, 前日比（N=残高, C=前日比, R=上場比）
+_MARGIN_KINDS = "NCRNCRNCNCNCNC"
+# コード（5桁の末尾0。優先株・社債型種類株式は末尾が0以外なので読まない）と ISIN（外国企業の株は
+# US・KY などの ISIN。最初は JP だけにしていて、メディシノバなど3銘柄を取りこぼした）
+_MARGIN_LINE = re.compile(r"(\d{3}[0-9A-Z])\s?0\s+[A-Z]{2}[0-9A-Z]{9,10}\s?[0-9A-Z]?\s*株数\s*Shs\.\s*(.*)$")
+_NUM = re.compile(r"^\d{1,3}(,\d{3})*$")
+_RATIO = re.compile(r"^(\d+\.\d+%|\*)$")
+
+
+def parse_margin_lines(lines: list[str]) -> pd.DataFrame:
+    """PDF から取り出した行のうち、各銘柄の「株数」の行を読む。
+
+    PDF の文字の取り出しでは、数字の途中に空白が入ることがある（"2,100" → "2,1 00"、"24,900" → "2 4,900"）。
+    そこで、割れた数字のつなぎ方をすべて試し、「売残＝一般信用＋制度信用」「買残＝一般信用＋制度信用」と
+    前日比の同じ関係が**すべて合う**つなぎ方を採る。合うものが1通りに決まらない行は読まない。
+    小計・合計の行と、優先株・社債型種類株式（コードの末尾が0以外）の行も読まない。
+    """
+    rows = {}
+    for line in lines:
+        if "Shs." not in line or "小計" in line or "合計" in line:
+            continue
+        m = _MARGIN_LINE.search(line)
+        if not m:
+            continue
+        found = {tuple(f) for f in _margin_fields(m.group(2).split()) if _margin_consistent(f)}
+        if len(found) != 1:
+            continue
+        sell, sell_chg, sell_ratio, buy, buy_chg, buy_ratio = next(iter(found))[:6]
+        rows[m.group(1)] = {"sell": sell, "sell_chg": sell_chg, "sell_ratio": _pct_or_none(sell_ratio),
+                            "buy": buy, "buy_chg": buy_chg, "buy_ratio": _pct_or_none(buy_ratio)}
+    df = pd.DataFrame.from_dict(rows, orient="index").rename_axis("code").reset_index()
+    return df if len(df) else pd.DataFrame(columns=["code", "sell", "sell_chg", "sell_ratio", "buy", "buy_chg", "buy_ratio"])
+
+
+def _margin_fields(tokens: list[str]) -> list[list]:
+    """割れた数字をつなぎ直して14項目にする候補をすべて返す（検算は _margin_consistent）。"""
+    out: list[list] = []
+
+    def rec(i: int, k: int, acc: list):
+        if len(out) > 50:           # 念のため。実データでは候補はほぼ1つ
+            return
+        if k == len(_MARGIN_KINDS):
+            if i == len(tokens):
+                out.append(acc)
+            return
+        if i >= len(tokens):
+            return
+        kind = _MARGIN_KINDS[k]
+        if kind == "R":
+            if _RATIO.match(tokens[i]):
+                rec(i + 1, k + 1, acc + [tokens[i]])
+            return
+        if kind == "C" and tokens[i] == "-":          # 上場直後などで前日比が無い
+            rec(i + 1, k + 1, acc + [None])
+            return
+        sign, j = (-1, i + 1) if kind == "C" and tokens[i] == "▲" else (1, i)
+        s = ""
+        for e in range(j, min(j + 4, len(tokens))):
+            s += tokens[e]
+            if _NUM.match(s):
+                rec(e + 1, k + 1, acc + [sign * int(s.replace(",", ""))])
+
+    rec(0, 0, [])
+    return out
+
+
+def _margin_consistent(f: list) -> bool:
+    sell, sc, _, buy, bc, _, ns, nsc, ss, ssc, nb, nbc, sb, sbc = f
+    if sell != ns + ss or buy != nb + sb:
+        return False
+    for total, a, b in ((sc, nsc, ssc), (bc, nbc, sbc)):
+        if None not in (total, a, b) and total != a + b:
+            return False
+    return True
+
+
+def _pct_or_none(s: str) -> float | None:
+    return float(s.rstrip("%")) if s.endswith("%") else None
 
 
 def parse_premium(raw: pd.DataFrame) -> pd.DataFrame:

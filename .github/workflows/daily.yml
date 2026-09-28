@@ -4,9 +4,11 @@ name: daily
 
 on:
   schedule:
-    # 平日 17:00 JST（= 08:00 UTC）。大引けの15:30から余裕を見ている。
-    # GitHub の混雑で30分ほど遅れることがある
-    - cron: "0 8 * * 1-5"
+    # 平日 17:17 JST（= 08:17 UTC）と、取りこぼしに備えた予備の 18:47 JST（= 09:47 UTC）。
+    # 毎時0分は定時実行が集中して GitHub に落とされることがある（最初の 17:00 の設定では、
+    # 2026-09-28 の実行が行われなかった）。JPX の信用残・品貸料は16時ごろ公表なので17時台で間に合う
+    - cron: "17 8 * * 1-5"
+    - cron: "47 9 * * 1-5"
   workflow_dispatch: # Actions の画面の「Run workflow」で手動実行できる
 
 permissions:
@@ -19,7 +21,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 定時実行のとき、その日の17時以降に作ったデータがもう公開済みなら何もしない
+  # （予備の時刻の実行は、ふだんここで終わる）。朝や日中に手動で作った分は、大引け後の
+  # データではないので止めない。手動の「Run workflow」はいつでも作り直す
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        run: |
+          # 実行が順番待ちの間に、前の実行が記録を更新していることがあるので、最新の main から読む
+          git fetch --depth=1 origin "${{ github.event.repository.default_branch }}"
+          built=$(git show FETCH_HEAD:pipeline/last_run.json | jq -r '.built // ""')
+          after_close="$(TZ=Asia/Tokyo date +%F) 17:00"
+          echo "event=${{ github.event_name }} built=$built after_close=$after_close"
+          if [ "${{ github.event_name }}" = "schedule" ] && [[ ! "$built" < "$after_close" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

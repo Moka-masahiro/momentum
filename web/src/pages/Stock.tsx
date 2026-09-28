@@ -4,10 +4,10 @@ import { setWatched } from "../watch";
 import Radar from "../components/Radar";
 import StockChart from "../components/StockChart";
 import { Card, Delta, Disclaimer, ErrorBox, Icon, Loading, RankBadge, Sheet, WhyChip } from "../components/ui";
-import { mdDate, mdTime, num, pct, signed, yen, yenLarge } from "../format";
+import { mdDate, mdTime, num, pct, shares, signed, yen, yenLarge } from "../format";
 import { METRICS, RANK_TEXT, type MetricInfo } from "../metrics";
 import { back, go, rememberStock } from "../router";
-import type { Disclosure, Reason, Report, StockDetail, StockSignal } from "../types";
+import type { Disclosure, Margin, Reason, Report, StockDetail, StockSignal } from "../types";
 
 export default function Stock({ code }: { code: string }) {
   const { data, error, loading, reload } = useData<StockDetail>(paths.stock(code), () => api.stock(code));
@@ -207,6 +207,7 @@ function ReasonCard({ d }: { d: StockDetail }) {
               {r.short ? `${num(r.short.now, 2)}%（前回 ${num(r.short.prev, 2)}%・${r.short.holders}社）` : "報告なし"}
             </td>
           </tr>
+          {r.margin && <MarginRows m={r.margin} />}
           <tr><td>逆日歩</td><td>{r.premium ? `${num(r.premium.rate, 2)}円` : "なし"}</td></tr>
           <tr><td>信用取引の規制など</td><td style={{ whiteSpace: "normal" }}>{r.flags.length ? r.flags.join("・") : "なし"}</td></tr>
         </tbody>
@@ -215,10 +216,29 @@ function ReasonCard({ d }: { d: StockDetail }) {
         ニュースは会社の適時開示だけで、新聞報道・アナリストの格付け・テーマ買いは含みません。
         需給の手がかりは状況証拠で、原因の証明ではありません。
         機関の空売り残高は、発行済株式の0.5%以上を空売りしている機関の報告分{r.short ? `（${mdDate(r.short.date)} 計算分まで）` : ""}。
+        {r.margin && `信用残は ${mdDate(r.margin.date)} 申込み時点（JPX・毎日16時公表）で、日数は直前20日平均の出来高の何日分か。`}
         逆日歩は権利取りの時期に優待目当てでも付くため、判定には使わず表示だけにしています。
       </p>
       <DisclosureList items={d.disclosures ?? []} />
     </Card>
+  );
+}
+
+function MarginRows({ m }: { m: Margin }) {
+  const days = (d: number | null) => (d != null ? `・出来高の${num(d, 1)}日分` : "");
+  const chg = (c: number | null) => (c != null ? `（前日比 ${c > 0 ? "+" : c < 0 ? "−" : "±"}${shares(Math.abs(c))}）` : "");
+  return (
+    <>
+      <tr>
+        <td>信用買い残</td>
+        <td style={{ whiteSpace: "normal" }}>{shares(m.buy)}{chg(m.buy_chg)}{days(m.buy_days)}{m.buy_ratio != null ? `・上場比${num(m.buy_ratio, 1)}%` : ""}</td>
+      </tr>
+      <tr>
+        <td>信用売り残</td>
+        <td style={{ whiteSpace: "normal" }}>{shares(m.sell)}{chg(m.sell_chg)}{days(m.sell_days)}</td>
+      </tr>
+      <tr><td>信用倍率（買い÷売り）</td><td>{m.ratio != null ? `${num(m.ratio, 2)}倍` : "売り残なし"}</td></tr>
+    </>
   );
 }
 

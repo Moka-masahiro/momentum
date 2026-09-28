@@ -40,6 +40,13 @@ export function yenLarge(v: number | null | undefined): string {
   return `${num(v)}円`;
 }
 
+/** 株数（信用残など）。1万株以上は「万株」で丸める。 */
+export function shares(v: number | null | undefined): string {
+  if (v == null) return "—";
+  if (Math.abs(v) >= 1e4) return `${num(v / 1e4, Math.abs(v) >= 1e6 ? 0 : 1)}万株`;
+  return `${num(v)}株`;
+}
+
 /** 日本式の色分け（上昇=赤 / 下落=青）。 */
 export function deltaClass(v: number | null | undefined): string {
   if (v == null || v === 0) return "t-muted";

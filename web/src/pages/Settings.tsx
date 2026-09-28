@@ -75,6 +75,7 @@ export default function Settings({ onStartTour }: { onStartTour: (t: Tour) => vo
                 <tr><td>空売り残高</td><td>{source(st.reasons?.short, "取得")}</td></tr>
                 <tr><td>日々公表銘柄など</td><td>{source(st.reasons?.flags, "取得")}</td></tr>
                 <tr><td>逆日歩</td><td>{source(st.reasons?.premium, "取得")}</td></tr>
+                <tr><td>信用残（全銘柄）</td><td>{source(st.reasons?.margin, "取得")}</td></tr>
               </>
             )}
           </tbody>
@@ -148,6 +149,7 @@ export default function Settings({ onStartTour }: { onStartTour: (t: Tour) => vo
             直接は取りに行かない。表題のリンク先は TDnet の PDF
           </li>
           <li>空売り残高・日々公表銘柄など・品貸料（逆日歩）: JPX の公表ファイル（毎日）</li>
+          <li>全銘柄の信用残: JPX「銘柄別信用取引残高」（毎日16時・PDF）。読み取った数字は「売り残＝一般信用＋制度信用」などの足し算で検算し、合わない銘柄は使わない</li>
           <li>新聞報道・アナリストの格付けは使っていない（無料で自動取得してよい入手先が無いため）</li>
           <li>公開のページに置くので、データはすべて合言葉で暗号化している</li>
         </ul>

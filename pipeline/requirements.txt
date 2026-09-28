@@ -4,3 +4,4 @@ numpy>=2.3,<3
 openpyxl>=3.1
 xlrd>=2.0.1
 cryptography>=44
+pypdf>=5,<7

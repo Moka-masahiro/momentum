@@ -70,6 +70,21 @@ export interface Reason {
   short: { now: number; prev: number; change: number; holders: number; date: string } | null;
   premium: { rate: number; max: number | null; date: string | null } | null;
   flags: string[];
+  margin?: Margin | null;   // 全銘柄の信用残（JPX。2026-09-28 から毎日。古いデータには無い）
+}
+
+/** 信用残（株数）。date は申込日（最新日の前の取引日）。ratio は信用倍率＝買い残÷売り残 */
+export interface Margin {
+  date: string | null;
+  buy: number;
+  buy_chg: number | null;
+  buy_ratio: number | null;   // 上場株式数に対する%
+  sell: number;
+  sell_chg: number | null;
+  sell_ratio: number | null;
+  ratio: number | null;
+  buy_days: number | null;    // 買い残が直前20日平均の出来高の何日分か
+  sell_days: number | null;
 }
 
 export interface SourceStatus {
@@ -84,6 +99,7 @@ export interface ReasonStatus {
   short: SourceStatus;
   flags: SourceStatus;
   premium: SourceStatus;
+  margin?: SourceStatus;
   counts: Record<Why, number>;
   unchecked: number;
 }

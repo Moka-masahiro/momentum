@@ -9,8 +9,8 @@
 取れた銘柄が少なすぎる・日付が古すぎるときは失敗で終える。そうすれば公開は行われず、
 前日のデータが残る（壊れたデータで上書きしない）。
 
-値動きの理由の材料（適時開示・空売り残高・日々公表銘柄・逆日歩）も取るが、こちらは
-取れなくても失敗にしない。取れなかったものは画面に「取得できず」と出る。
+値動きの理由の材料（適時開示・空売り残高・日々公表銘柄・逆日歩・全銘柄の信用残）も取るが、
+こちらは取れなくても失敗にしない。取れなかったものは画面に「取得できず」と出る。
 --cache を付けたときは、材料も同じフォルダーの extras.pkl に保存して使い回す。
 """
 import argparse
@@ -150,6 +150,10 @@ def _load_extras(args, dates: pd.DatetimeIndex, now: pd.Timestamp) -> reasons.Ex
         ex.premium = fetch.fetch_premium()
     except Exception as e:
         ex.errors["premium"] = str(e)
+    try:
+        ex.margin, ex.margin_date = fetch.fetch_margin_all()
+    except Exception as e:
+        ex.errors["margin"] = str(e)
     for k, v in ex.errors.items():
         logger.warning("%s: 取得できませんでした（%s）", k, v)
     if cache:

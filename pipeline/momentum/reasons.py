@@ -17,6 +17,7 @@
                ・出来高が急増したのに値動きは小さい（指数の入れ替え・大口の売買で起きやすい形）
                ・信用取引の規制・日々公表の対象（過熱のサイン。最新日だけ）
                ・機関の空売り残高が、値動きと同じ向きに大きく増減した（最新日だけ）
+               ・信用残が重く、値動きを強める向きにある（下げた日の買い残・上げた日の売り残。最新日だけ）
                ・3月末・9月末の権利落ち日の下げ
 4. 材料不明 … どれにも当たらない
 
@@ -63,6 +64,14 @@ QUIET_Z = 2.0              # 出来高型: 出来高は3倍以上なのに、業
 QUIET_RET = 0.02           # 騰落率も±2%未満
 SHORT_CHANGE = 0.5         # 機関の空売り残高（報告分）の増減（ポイント）
 SHORT_RECENT = pd.Timedelta(days=4)   # 手がかりに使う報告の新しさ（報告は計算日の翌営業日ごろ届く）
+# 信用残（JPX「銘柄別信用取引残高」。最新の申込日の分だけ）。上位1割に入る重さで、値動きを強める向きのものだけを
+# 手がかりにする。実測（2026-09-25 申込み分・流動性のある1,922銘柄）: 買い残÷20日平均出来高は中央値1.1日・
+# 上位1割5.7日、売り残÷出来高は中央値0.1日・上位1割1.5日、信用倍率1倍以下（売り長）は12%
+MARGIN_LONG_DAYS = 5.0     # 下げた日: 信用買い残が出来高の5日分以上（値下がりで投げ売りが出やすい）
+MARGIN_LONG_RATIO = 2.0    #          かつ信用倍率2倍以上（買い長）。売り残も同じくらい多いなら、投げ一方とは言えない
+MARGIN_SHORT_DAYS = 1.5    # 上げた日: 信用売り残が出来高の1.5日分以上（値上がりで買い戻し＝踏み上げが入りやすい）
+MARGIN_SHORT_RATIO = 1.5   #          かつ信用倍率1.5倍以下（拮抗〜売り長）。アツギ 2026-09-28 は売り残が出来高の
+                           #          2.6日分でも買い残がその5.4倍あり（買い長）、踏み上げとは言いにくかった
 FLAG_NAMES = {"規": "信用取引の規制", "日": "日々公表銘柄", "株": "日証金の貸株申込制限",
               "喚": "日証金の貸株注意喚起", "監": "売買監理銘柄", "○": "取引所の注意喚起"}
 HEAT_FLAGS = "規日株喚"     # 需給の手がかりに使う印（監・○は表示だけ）
@@ -159,19 +168,30 @@ def effective_day(times: pd.Series, dates: pd.DatetimeIndex) -> pd.Series:
     return out
 
 
-def is_ex_rights(d: pd.Timestamp, dates: pd.DatetimeIndex) -> bool:
-    """3月末・9月末の権利落ち日か（その月の最後から2番目の取引日）。
-
-    月末までの取引日がまだデータに無いときは、土日だけを休みとして数える
-    （3月末・9月末の数日に祝日は来ない）。
-    """
-    if d.month not in EX_RIGHTS_MONTHS:
-        return False
+def _month_days(d: pd.Timestamp, dates: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """d の月の取引日。月末までの取引日がまだデータに無いときは、土日だけを休みとして数える
+    （3月末・9月末の数日に祝日は来ない）。"""
     end = d + pd.offsets.MonthEnd(0)
     known = dates[(dates >= d.replace(day=1)) & (dates <= end)]
     future = pd.bdate_range(dates[-1] + pd.Timedelta(days=1), end) if dates[-1] < end else pd.DatetimeIndex([])
-    days = known.union(future)
+    return known.union(future)
+
+
+def is_ex_rights(d: pd.Timestamp, dates: pd.DatetimeIndex) -> bool:
+    """3月末・9月末の権利落ち日か（その月の最後から2番目の取引日）。"""
+    if d.month not in EX_RIGHTS_MONTHS:
+        return False
+    days = _month_days(d, dates)
     return len(days) >= 2 and d == days[-2]
+
+
+def is_last_with_rights(d: pd.Timestamp, dates: pd.DatetimeIndex) -> bool:
+    """3月末・9月末の権利付き最終日か（権利落ち日の前の取引日＝最後から3番目の取引日）。
+    配当・優待を得るための売買で出来高が膨らむ（2026-09-28 は流動性のある銘柄の70銘柄が出来高急増・値動き小）。"""
+    if d.month not in EX_RIGHTS_MONTHS:
+        return False
+    days = _month_days(d, dates)
+    return len(days) >= 3 and d == days[-3]
 
 
 @dataclass
@@ -184,6 +204,8 @@ class Extras:
     flags: pd.DataFrame | None = None           # code, flags
     flags_date: str | None = None
     premium: pd.DataFrame | None = None         # code, date, rate, max_rate
+    margin: pd.DataFrame | None = None          # code, sell, sell_chg, sell_ratio, buy, buy_chg, buy_ratio
+    margin_date: str | None = None              # 信用残の申込日（最新日の前の取引日になる）
     errors: dict = field(default_factory=dict)  # 取得に失敗したもの → 理由
 
 
@@ -206,6 +228,39 @@ def _pct(x, nd: int = 2):
 def _signed(x: float) -> str:
     s = "+" if x > 0 else "−" if x < 0 else "±"
     return f"{s}{abs(x) * 100:.1f}%"
+
+
+def _md(day: str | None) -> str:
+    """"2026-09-25" → "9/25"。"""
+    if not day:
+        return ""
+    _, m, d = day.split("-")
+    return f"{int(m)}/{int(d)}"
+
+
+def _int_or_none(x):
+    return None if x is None or not np.isfinite(x) else int(x)
+
+
+def _margin_summary(margin: pd.DataFrame | None, day: str | None, vavg: pd.Series) -> dict:
+    """銘柄ごとの信用残と、出来高（直前20日平均）の何日分か。"""
+    if margin is None or margin.empty:
+        return {}
+    out = {}
+    for r in margin.itertuples():
+        va = vavg.get(r.code)
+        va = float(va) if va is not None and np.isfinite(va) and va > 0 else None
+        out[r.code] = {
+            "date": day,
+            "buy": int(r.buy), "buy_chg": _int_or_none(r.buy_chg),
+            "buy_ratio": None if r.buy_ratio is None or not np.isfinite(r.buy_ratio) else float(r.buy_ratio),
+            "sell": int(r.sell), "sell_chg": _int_or_none(r.sell_chg),
+            "sell_ratio": None if r.sell_ratio is None or not np.isfinite(r.sell_ratio) else float(r.sell_ratio),
+            "ratio": round(r.buy / r.sell, 2) if r.sell > 0 else None,          # 信用倍率（買い残÷売り残）
+            "buy_days": round(r.buy / va, 1) if va else None,
+            "sell_days": round(r.sell / va, 1) if va else None,
+        }
+    return out
 
 
 def _sector_returns(R: np.ndarray, b: np.ndarray, sectors: pd.Series) -> tuple[np.ndarray, np.ndarray]:
@@ -312,6 +367,7 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
     by_code = {k: g for k, g in disc.groupby("code")} if len(disc) else {}
     short = _short_summary(ex.short)                                    # 表示用（数日分の報告）
     short_recent = _short_summary(ex.short, since=dates[-1] - SHORT_RECENT)   # 手がかり用
+    margin = _margin_summary(ex.margin, ex.margin_date, vavg.iloc[-1])
     flags = dict(zip(ex.flags["code"], ex.flags["flags"])) if ex.flags is not None else {}
     premium = {}
     if ex.premium is not None:
@@ -323,6 +379,7 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
     last = len(dates) - 1
     window = range(max(len(dates) - WINDOW_DAYS, 1), len(dates))
     ex_days = {dates[i] for i in window if is_ex_rights(dates[i], dates)}
+    last_rights_days = {dates[i] for i in window if is_last_with_rights(dates[i], dates)}
 
     def prev_date(i: int, j: int) -> pd.Timestamp:
         k = prev_pos[i, j]
@@ -343,9 +400,14 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
         code, r, z, vr = codes[j], R[i, j], Z[i, j], VR[i, j]
         out = []
         if vr >= NOTABLE_VR and abs(r) < QUIET_RET and (np.isnan(z) or abs(z) < QUIET_Z):
-            out.append({"key": "volume", "short": "出来高急増・値動き小",
-                        "text": f"出来高が20日平均の{vr:.1f}倍に増えたのに、値動きは小さい"
-                                "（指数の入れ替えや大口の売買で起きやすい形）"})
+            if dates[i] in last_rights_days:
+                out.append({"key": "volume", "short": "権利取りの売買",
+                            "text": f"{dates[i].month}月末の権利付き最終日（配当・優待の権利を得られる最後の日）。"
+                                    f"出来高が20日平均の{vr:.1f}倍に増えたのに値動きは小さく、権利取りの売買とみられる"})
+            else:
+                out.append({"key": "volume", "short": "出来高急増・値動き小",
+                            "text": f"出来高が20日平均の{vr:.1f}倍に増えたのに、値動きは小さい"
+                                    "（指数の入れ替えや大口の売買で起きやすい形）"})
         if i == last:
             heat = [FLAG_NAMES[ch] for ch in flags.get(code, "") if ch in HEAT_FLAGS]
             if heat:
@@ -359,6 +421,20 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
             if sh and sh["change"] >= SHORT_CHANGE and r < 0:
                 out.append({"key": "short", "short": "空売りの増加",
                             "text": f"機関の空売り残高（報告分）が {sh['prev']:.2f}% → {sh['now']:.2f}% に増えた"})
+            mg = margin.get(code)
+            if (mg and r < 0 and (mg["buy_days"] or 0) >= MARGIN_LONG_DAYS
+                    and (mg["ratio"] is None or mg["ratio"] >= MARGIN_LONG_RATIO)):
+                parts = ([f"上場株式の{mg['buy_ratio']:.1f}%"] if mg["buy_ratio"] is not None else []) + [
+                    f"信用倍率 {mg['ratio']:.2f}倍の買い長" if mg["ratio"] is not None else "売り残なし"]
+                out.append({"key": "margin_long", "short": "信用買い残が重い",
+                            "text": f"信用買い残が出来高の{mg['buy_days']:.1f}日分と重い（{'・'.join(parts)}）。"
+                                    f"値下がりで投げ売りが出やすい（{_md(mg['date'])} 申込み時点）"})
+            if (mg and r > 0 and (mg["sell_days"] or 0) >= MARGIN_SHORT_DAYS
+                    and mg["ratio"] is not None and mg["ratio"] <= MARGIN_SHORT_RATIO):
+                side = "売り長" if mg["ratio"] < 1 else "売り買いが拮抗"
+                out.append({"key": "margin_short", "short": "売り残が多い（踏み上げ）",
+                            "text": f"信用売り残が出来高の{mg['sell_days']:.1f}日分・信用倍率 {mg['ratio']:.2f}倍（{side}）。"
+                                    f"値上がりで買い戻し（踏み上げ）が入りやすい（{_md(mg['date'])} 申込み時点）"})
         if dates[i] in ex_days and r < 0:
             out.append({"key": "ex_rights", "short": "権利落ち日",
                         "text": f"{dates[i].month}月末の権利落ち日。配当・優待の権利が落ちた分だけ下がる銘柄が多い"})
@@ -456,6 +532,7 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
             "short": short.get(code),
             "premium": premium.get(code),
             "flags": [FLAG_NAMES[ch] for ch in flags.get(code, "")],
+            "margin": margin.get(code),
         }
 
     # --- 銘柄詳細の開示一覧（その開示が効いた日の値動き付き） ---
@@ -491,6 +568,7 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
         "premium": {"ok": ex.premium is not None,
                     "date": next((v["date"] for v in premium.values() if v["date"]), None),
                     "error": ex.errors.get("premium")},
+        "margin": {"ok": ex.margin is not None, "date": ex.margin_date, "error": ex.errors.get("margin")},
         "counts": {k: int(counts.get(k, 0)) for k in LABELS},
         "unchecked": int(unchecked),
     }
@@ -523,5 +601,6 @@ def brief(status: dict | None) -> dict | None:
         "disclosures": status["disclosures"]["count"],
         "disclosure_days_failed": status["disclosures"]["days_failed"],
         "short": status["short"]["ok"], "flags": status["flags"]["ok"], "premium": status["premium"]["ok"],
+        "margin": status["margin"]["ok"],
         "unchecked": status["unchecked"],
     }
