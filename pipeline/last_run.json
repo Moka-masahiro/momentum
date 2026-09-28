@@ -1,19 +1,19 @@
 {
- "built": "2026-09-28 00:49",
- "as_of": "2026-09-25",
+ "built": "2026-09-28 17:25",
+ "as_of": "2026-09-28",
  "stocks_listed": 3712,
  "stocks_fetched": 3712,
  "stocks_failed": 0,
  "adjustments": 3,
  "files": 3715,
- "size_mb": 30.2,
- "elapsed_sec": 383.9,
+ "size_mb": 30.3,
+ "elapsed_sec": 315.6,
  "reasons": {
-  "disclosures": 3463,
+  "disclosures": 3466,
   "disclosure_days_failed": 0,
   "short": true,
   "flags": true,
-  "premium": true,
+  "premium": false,
   "unchecked": 0
  }
 }
