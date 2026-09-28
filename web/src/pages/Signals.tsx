@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, WhyNote } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, SessionNote, WhyNote } from "../components/ui";
 import { mdDate, num, pct } from "../format";
 import { back, go } from "../router";
 import type { SignalGroup, SignalsResponse } from "../types";
@@ -39,6 +39,7 @@ export default function Signals({ date }: { date?: string }) {
                 流動性のある銘柄だけ
               </label>
             </div>
+            {data.date === data.as_of && <SessionNote session={data.session} className="mt-2" />}
           </div>
           <div className="card !py-3" style={{ borderColor: "rgba(232,199,111,0.4)" }}>
             <p className="prose !text-[12.5px]">

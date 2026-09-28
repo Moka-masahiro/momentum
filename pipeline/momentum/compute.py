@@ -38,6 +38,7 @@ class State:
     elapsed_sec: float = 0.0
     adjusted: set = field(default_factory=set)
     reasons: rsn.Reasons | None = None    # 値動きの理由（build.py が後から入れる。作れなければ None）
+    session: str = "close"                # close = 大引け後 / am = 前場の引け後（当日は途中経過）/ intraday
 
     @property
     def as_of(self) -> str:

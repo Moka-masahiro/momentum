@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { deltaClass, num, pct, signed } from "../format";
-import type { Rank, Why } from "../types";
+import type { Rank, Session, Why } from "../types";
 
 /* ---------- アイコン（線画。currentColor で色を継ぐ） ---------- */
 
@@ -100,6 +100,28 @@ export function WhyNote({ row, text = true }: { row: { why?: Why | null; why_tex
       <WhyChip why={row.why} />
       {text && row.why_text && <span className="why-text">{row.why_text}</span>}
     </>
+  );
+}
+
+/* ---------- データの時点（昼の実行） ---------- */
+
+export const SESSION_LABEL: Record<Session, string> = { close: "", am: "前場", intraday: "取引中" };
+
+/** 昼の実行のデータなら「前場」などの印を出す（大引け後のデータは何も出さない） */
+export function SessionBadge({ session }: { session: Session | undefined }) {
+  if (!session || session === "close") return null;
+  return <span className="chip chip-warn !text-[11px] !py-0.5 !px-2">{SESSION_LABEL[session]}</span>;
+}
+
+/** 途中経過のデータであることの案内 */
+export function SessionNote({ session, className = "" }: { session: Session | undefined; className?: string }) {
+  if (!session || session === "close") return null;
+  return (
+    <p className={`note t-warn ${className}`}>
+      {session === "am"
+        ? "前場（11:30）までの途中経過です。当日の株価は前場の終値、出来高は前場の分だけ（ふだん1日の約半分）。17時過ぎに大引けのデータに置き換わります。"
+        : "取引時間中の途中経過です。当日の株価と出来高は途中の値で、17時過ぎに大引けのデータに置き換わります。"}
+    </p>
   );
 }
 

@@ -11,6 +11,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import build  # noqa: E402
 import fetch  # noqa: E402
 import secure  # noqa: E402
 from momentum import data, export, indicators as ind, reasons as rsn, signals as sig  # noqa: E402
@@ -368,6 +369,42 @@ def test_heavy_short_interest_is_a_supply_clue_on_an_up_move():
     ex.margin = margin.assign(buy=[110000, 90000])      # 1001 の信用倍率 5.5倍
     rs = rsn.compute(p, base, ex, last + pd.Timedelta(hours=17))
     assert rs.latest.at["1001", "why"] == "unknown"
+
+
+def test_session_from_time_of_run():
+    from datetime import date, datetime
+    tue = date(2026, 9, 29)
+    at = lambda h, m: datetime(2026, 9, 29, h, m)   # noqa: E731
+    assert build.session_of(at(11, 53), tue) == "am"          # 昼の定時実行
+    assert build.session_of(at(12, 29), tue) == "am"
+    assert build.session_of(at(10, 0), tue) == "intraday"     # 取引時間中の手動実行
+    assert build.session_of(at(13, 0), tue) == "intraday"
+    assert build.session_of(at(17, 17), tue) == "close"       # 夕方の定時実行
+    assert build.session_of(at(8, 0), tue) == "close"
+    # 祝日など当日の日足が無い日は、昼でも前の取引日の終値なので close
+    assert build.session_of(at(11, 53), date(2026, 9, 28)) == "close"
+
+
+def test_morning_session_uses_morning_volume_and_cutoff():
+    # 昼の実行（前場の引け後）: 出来高は前場の分なので、1日平均の1.5倍以上で急増とみる。
+    # 11:30 以降の開示は前場の値動きの理由にせず、後場の材料として一覧に出す
+    p, base, disc, days, last = _reason_panel()
+    vol = p.volume.copy()
+    vol.iloc[-1, 4] = 20000.0            # 1004: 1日平均の2倍・値動きなし（夕方の基準3倍には届かない）
+    p = data.Panel(p.open, p.high, p.low, p.close, vol, p.master)
+    disc = pd.concat([disc, pd.DataFrame([{"time": last + pd.Timedelta(hours=11, minutes=40), "code": "1001",
+                                           "title": "業績予想の上方修正に関するお知らせ", "url": None}])])
+    ex = rsn.Extras(disclosures=disc, disclosure_days=days)
+    now = last + pd.Timedelta(hours=11, minutes=55)
+    close = rsn.compute(p, base, ex, now, session="close")
+    am = rsn.compute(p, base, ex, now, session="am")
+    assert pd.isna(close.latest.at["1004", "why"])
+    assert am.latest.at["1004", "why"] == "supply" and am.latest.at["1004", "why_text"] == "出来高急増・値動き小"
+    assert am.detail["1004"]["clues"][0]["text"].startswith("前場だけで出来高が1日平均の2.0倍")
+    assert close.latest.at["1001", "why"] == "news"          # 大引け後なら 11:40 の開示も当日の理由
+    assert am.latest.at["1001", "why"] == "unknown"          # 前場の理由にはしない
+    # 11:40 の開示は「後場の材料」、引け後（16:00）の開示は「次の取引日の材料」
+    assert {x["pending"] for x in am.disclosures["1001"] if x["day"] is None} == {"pm", "next"}
 
 
 def test_short_clue_uses_only_recent_reports():

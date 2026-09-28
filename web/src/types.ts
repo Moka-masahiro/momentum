@@ -5,6 +5,9 @@ export type Rank = "S" | "A" | "B" | "C" | "D";
 /** 値動きの理由（pipeline/momentum/reasons.py）。目立って動いた日だけに付く */
 export type Why = "news" | "supply" | "market" | "unknown";
 
+/** データがいつの時点のものか。am = 前場の引け後（当日は前場の値まで）、intraday = 取引時間中の途中 */
+export type Session = "close" | "am" | "intraday";
+
 export interface Series {
   dates: string[];
   values: (number | null)[];
@@ -48,12 +51,14 @@ export interface Disclosure {
   kind: "news" | "supply" | "routine";
   url: string | null;       // TDnet の PDF（31日で消える）
   day: string | null;       // その開示が効いた取引日（null = まだ来ていない）
+  pending?: "next" | "pm" | null;   // day が null のとき: next = 次の取引日の材料 / pm = 後場の材料
   ret?: number | null;      // その日の騰落率（%）
   idio?: number | null;     // その日の業種の中央値との差（%）
 }
 
 export interface Reason {
   date: string;
+  session?: Session;
   label: Why | null;
   text: string | null;
   notable: boolean;         // 目立って動いたか
@@ -106,6 +111,7 @@ export interface ReasonStatus {
 
 export interface MoversResponse {
   as_of: string;
+  session: Session;
   status: ReasonStatus | null;
   items: StockRow[];        // 理由の付いた銘柄（業種との差の大きい順）
 }
@@ -145,6 +151,7 @@ export interface SignalTypeCount {
 
 export interface Home {
   as_of: string;
+  session?: Session;         // 古いデータには無い（= close）
   computed_at: string;
   universe: number;
   market: {
@@ -204,6 +211,7 @@ export interface SignalGroup {
 
 export interface SignalsResponse {
   as_of: string;
+  session: Session;
   date: string;
   dates: string[];
   total: number;
@@ -292,6 +300,7 @@ export interface Metrics {
 
 export interface StockDetail extends StockRow {
   as_of: string;
+  session?: Session;
   watched: boolean;
   reason?: Reason | null;          // 古いデータには無い
   disclosures?: Disclosure[];      // 直近30日の開示（新しい順）

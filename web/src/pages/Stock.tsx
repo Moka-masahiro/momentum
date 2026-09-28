@@ -3,7 +3,7 @@ import { api, invalidate, paths, useData } from "../data";
 import { setWatched } from "../watch";
 import Radar from "../components/Radar";
 import StockChart from "../components/StockChart";
-import { Card, Delta, Disclaimer, ErrorBox, Icon, Loading, RankBadge, Sheet, WhyChip } from "../components/ui";
+import { Card, Delta, Disclaimer, ErrorBox, Icon, Loading, RankBadge, SessionBadge, SessionNote, Sheet, WhyChip } from "../components/ui";
 import { mdDate, mdTime, num, pct, shares, signed, yen, yenLarge } from "../format";
 import { METRICS, RANK_TEXT, type MetricInfo } from "../metrics";
 import { back, go, rememberStock } from "../router";
@@ -91,6 +91,7 @@ function Summary({ d }: { d: StockDetail }) {
       <div className="flex items-end gap-3 mt-3">
         <span className="text-[28px] font-bold leading-none">{yen(d.close)}</span>
         <span className="text-[15px] font-semibold"><Delta v={d.chg1} digits={2} /></span>
+        <SessionBadge session={d.session} />
       </div>
       <div className="flex gap-4 mt-1.5 text-[12.5px] t-2">
         <span>5日 <Delta v={d.chg5} /></span>
@@ -124,6 +125,7 @@ function Summary({ d }: { d: StockDetail }) {
       {!d.traded_today && (
         <p className="note mt-2 t-warn">最新日は売買が成立していません。{mdDate(d.last_date)} 時点の値です。</p>
       )}
+      <SessionNote session={d.session} className="mt-2" />
     </Card>
   );
 }
@@ -135,28 +137,32 @@ const KIND_CLASS: Record<Disclosure["kind"], string> = { news: "why-news", suppl
 /** 判定の中身を1〜2文で。数字はその日のデータから作る（固定の文面にしない） */
 function reasonSentence(r: Reason): string {
   if (r.ret == null) return "最新日は売買が成立していないため、判定していません。";
+  const am = r.session === "am";
+  const when = am ? "前場で" : "";                           // 昼の実行は前場の値動き
+  const until = am ? "前場の引け（11:30）" : "当日の引け";
+  const volume = am ? `前場の出来高は1日平均の${num(r.vr, 1)}倍` : `出来高は20日平均の${num(r.vr, 1)}倍`;
   const move = `業種平均との差 ${pct(r.idio)}`;
   const why = r.z != null && Math.abs(r.z) >= 3
     ? `（普段の${num(Math.abs(r.z), 1)}倍）`
-    : r.vr != null && r.vr >= 3 ? `（出来高は20日平均の${num(r.vr, 1)}倍）` : "";
+    : r.vr != null && r.vr >= (am ? 1.5 : 3) ? `（${volume}）` : "";
   if (r.notable && !r.checked) {
-    return `目立って動きました（${move}）が、開示を取得できなかった日を含むため、理由を判定していません。`;
+    return `${when}目立って動きました（${move}）が、開示を取得できなかった日を含むため、理由を判定していません。`;
   }
   switch (r.label) {
     case "news":
-      return `業種平均より ${pct(r.idio)} 動きました${why}。前の取引日の引け後から当日の引けまでに、会社の開示がありました。`;
+      return `${when}業種平均より ${pct(r.idio)} 動きました${why}。前の取引日の引け後から${until}までに、会社の開示がありました。`;
     case "supply":
       return r.disclosures.some((x) => x.kind === "supply")
-        ? `業種平均より ${pct(r.idio)} 動きました${why}。増資・自社株買いなど、株の需給に関わる開示がありました。`
-        : `業種平均より ${pct(r.idio)} 動きました${why}。開示はありませんが、需給の手がかりがあります。`;
+        ? `${when}業種平均より ${pct(r.idio)} 動きました${why}。増資・自社株買いなど、株の需給に関わる開示がありました。`
+        : `${when}業種平均より ${pct(r.idio)} 動きました${why}。開示はありませんが、需給の手がかりがあります。`;
     case "market":
       return r.clues.some((c) => c.key === "group")
-        ? `業種平均より ${pct(r.idio)} 動きました${why}。開示はありませんが、同じ業種の他の銘柄もそろって同じ向きに動いた日です。`
-        : `${r.sector ?? "業種"}全体が ${pct(r.sector_ret)} 動いた日で、この銘柄だけの動きは目立ちません（${move}）。`;
+        ? `${when}業種平均より ${pct(r.idio)} 動きました${why}。開示はありませんが、同じ業種の他の銘柄もそろって同じ向きに動いています。`
+        : `${when}${r.sector ?? "業種"}全体が ${pct(r.sector_ret)} 動いていて、この銘柄だけの動きは目立ちません（${move}）。`;
     case "unknown":
-      return `業種平均より ${pct(r.idio)} 動きました${why}が、開示も需給の手がかりも見当たりません。新聞報道やテーマ買いなど、ここでは拾えない理由の可能性があります。`;
+      return `${when}業種平均より ${pct(r.idio)} 動きました${why}が、開示も需給の手がかりも見当たりません。新聞報道やテーマ買いなど、ここでは拾えない理由の可能性があります。`;
     default:
-      return `目立った動きはありません（${move}・出来高は20日平均の${num(r.vr, 1)}倍）。`;
+      return `${when}目立った動きはありません（${move}・${volume}）。`;
   }
 }
 
@@ -167,7 +173,7 @@ function ReasonCard({ d }: { d: StockDetail }) {
   const relevant = r.disclosures.filter((x) => x.kind !== "routine");
   const shown = relevant.slice(0, 3);
   return (
-    <Card icon="pulse" guide="reason" aside={mdDate(r.date)}
+    <Card icon="pulse" guide="reason" aside={`${mdDate(r.date)}${r.session === "am" ? " 前場" : ""}`}
       title={<span className="flex items-center gap-2">値動きの理由<WhyChip why={r.label} /></span>}>
       <p className="text-[13.5px] leading-relaxed">{reasonSentence(r)}</p>
 
@@ -197,10 +203,13 @@ function ReasonCard({ d }: { d: StockDetail }) {
 
       <table className="tbl mt-3">
         <tbody>
-          <tr><td>当日の騰落率</td><td><Delta v={r.ret} digits={2} /></td></tr>
+          <tr><td>{r.session === "am" ? "前場の騰落率" : "当日の騰落率"}</td><td><Delta v={r.ret} digits={2} /></td></tr>
           <tr><td>業種（{r.sector ?? "—"}）の中央値</td><td><Delta v={r.sector_ret} /></td></tr>
           <tr><td>市場全体の中央値</td><td><Delta v={r.market_ret} /></td></tr>
-          <tr><td>出来高（20日平均比）</td><td>{r.vr != null ? `${num(r.vr, 1)}倍` : "—"}</td></tr>
+          <tr>
+            <td>{r.session === "am" ? "前場の出来高（1日平均比）" : "出来高（20日平均比）"}</td>
+            <td>{r.vr != null ? `${num(r.vr, 1)}倍` : "—"}</td>
+          </tr>
           <tr>
             <td>機関の空売り残高</td>
             <td style={{ whiteSpace: "normal" }}>
@@ -281,7 +290,7 @@ function DisclosureList({ items }: { items: Disclosure[] }) {
                     <div className="text-[10.5px] t-3 num">（{pct(x.idio)}）</div>
                   </>
                 ) : (
-                  <span className="note">次の取引日</span>
+                  <span className="note">{x.pending === "pm" ? "後場の材料" : "次の取引日"}</span>
                 )}
               </div>
             </div>

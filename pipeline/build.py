@@ -40,12 +40,44 @@ STATUS = Path(__file__).resolve().parent / "last_run.json"
 MIN_COVERAGE = 0.9     # 銘柄一覧のうち、これ以上の日足が取れなければ失敗にする
 MAX_STALE_DAYS = 6     # 最新の日足がこれより古ければ失敗にする（連休でも5日程度）
 
+# データがいつの時点のものか（session）。昼の実行（前場の引け後）と夕方の実行で同じ処理を使い、
+# 昼は当日の日足が「前場の終値まで」の途中経過になる。Yahoo の値は20分ほど遅れて届く
+SESSION_AM = (11 * 60 + 30, 12 * 60 + 30)   # 昼休み。前場の値がそろっている
+SESSION_CLOSE_FROM = 15 * 60 + 50           # 大引け（15:30）の値がそろうころ
+MIN_TODAY_SHARE = 0.5  # 取引時間中の実行で、前の取引日に売買のあった銘柄のうち当日の値が付いた割合が
+                       # これ未満なら、取得がおかしいとみて公開しない（夕方の実行に任せる）
+
+
+def session_of(now: datetime, latest_day) -> str:
+    """close = 大引け後・寄り付き前・休日（最新の日足はその日の終値）、am = 昼休み（当日は前場の値まで）、
+    intraday = 取引時間中（当日は途中の値）。祝日など当日の日足が無い日は close。"""
+    if latest_day != now.date() or now.weekday() >= 5:
+        return "close"
+    t = now.hour * 60 + now.minute
+    if SESSION_AM[0] <= t < SESSION_AM[1]:
+        return "am"
+    if 9 * 60 <= t < SESSION_CLOSE_FROM:
+        return "intraday"
+    return "close"
+
+
+def _today_share(bars: pd.DataFrame) -> float:
+    """前の取引日に売買のあった銘柄のうち、最新の日にも値が付いた割合。"""
+    b = bars[bars["volume"] > 0]
+    days = sorted(b["date"].unique())
+    if len(days) < 2:
+        return 1.0
+    had = set(b.loc[b["date"] == days[-2], "code"])
+    return len(had & set(b.loc[b["date"] == days[-1], "code"])) / max(len(had), 1)
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, help="データの出力先（web/public/data）")
     ap.add_argument("--limit", type=int, help="銘柄数を絞る（動作確認用）")
     ap.add_argument("--cache", help="取得結果の保存先。あれば取得せずに読む（開発用）")
+    ap.add_argument("--session", choices=("auto", "close", "am", "intraday"), default="auto",
+                    help="いつ時点のデータか。auto は実行した時刻から決める（手元で昼の表示を確かめるときは am）")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -66,9 +98,17 @@ def main() -> int:
     if (datetime.now(JST).date() - latest.date()).days > MAX_STALE_DAYS:
         logger.error("最新の日足が古すぎます（%s）。公開しません", latest.date())
         return 1
+    session = args.session if args.session != "auto" else session_of(datetime.now(JST), latest.date())
+    if session != "close":
+        share = _today_share(bars)
+        logger.info("session %s: %.1f%% of stocks have today's bar", session, share * 100)
+        if share < MIN_TODAY_SHARE and not args.limit:
+            logger.error("取引時間中なのに当日の値が付いた銘柄が少なすぎます（%.1f%%）。公開しません", share * 100)
+            return 1
 
     panel = data.make_panel(bars, master)
     st = compute(panel, index)
+    st.session = session
     st.reasons = _reasons(args, st)
 
     cfg = secure.load_config()
@@ -99,6 +139,7 @@ def main() -> int:
     status = {
         "built": built,
         "as_of": st.as_of,
+        "session": session,
         "stocks_listed": len(master),
         "stocks_fetched": int(bars["code"].nunique()),
         "stocks_failed": len(failed),
@@ -118,7 +159,7 @@ def _reasons(args, st):
     now = pd.Timestamp(datetime.now(JST).replace(tzinfo=None))
     try:
         ex = _load_extras(args, st.panel.dates, now)
-        rs = reasons.compute(st.panel, st.base, ex, now)
+        rs = reasons.compute(st.panel, st.base, ex, now, session=st.session)
         logger.info("reasons: %s", json.dumps(reasons.brief(rs.status), ensure_ascii=False))
         return rs
     except Exception:

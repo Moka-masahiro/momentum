@@ -17,6 +17,7 @@ import type {
   MoversResponse,
   RankingResponse,
   ReasonStatus,
+  Session,
   SignalGroup,
   SignalStats,
   SignalsResponse,
@@ -267,6 +268,7 @@ type HomeDoc = Omit<Home, "watchlist" | "movers">;
 
 interface SignalsDoc {
   as_of: string;
+  session?: Session;
   dates: string[];
   // [銘柄, シグナル, 流動性あり, その日の値動きの理由, 短い文言]（理由は新しいデータにだけある）
   events: Record<string, [string, string, boolean, (Why | null)?, (string | null)?][]>;
@@ -299,7 +301,7 @@ export const api = {
 
   async movers(): Promise<MoversResponse> {
     const [h, l] = await Promise.all([load<HomeDoc>("home"), latest()]);
-    return { as_of: l.as_of, status: h.reasons ?? null, items: moverRows(l) };
+    return { as_of: l.as_of, session: h.session ?? "close", status: h.reasons ?? null, items: moverRows(l) };
   },
 
   async ranking(segment: string, minTurnover: number, limit: number): Promise<RankingResponse> {
@@ -331,7 +333,7 @@ export const api = {
         .sort((a, b) => Number(!a.liquid) - Number(!b.liquid) || (b.score ?? 0) - (a.score ?? 0));
       return { ...d, count: items.length, items, stats: s.stats[d.key] ?? null };
     });
-    return { as_of: s.as_of, date: target, dates: s.dates, total: today.length, groups };
+    return { as_of: s.as_of, session: s.session ?? "close", date: target, dates: s.dates, total: today.length, groups };
   },
 
   market: () => load<MarketResponse>("market"),

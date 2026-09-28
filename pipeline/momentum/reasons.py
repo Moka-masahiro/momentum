@@ -42,6 +42,12 @@ from . import indicators as ind
 # --- 目立った動き --------------------------------------------------------------
 NOTABLE_Z = 3.0            # 業種との差が普段（直近60日の業種との差のばらつき）の3倍以上
 NOTABLE_VR = 3.0           # 出来高が直前20日平均の3倍以上
+# 昼の実行（前場の引け後）は、当日の出来高が前場の分だけ。実測（流動性のある200銘柄×18日、2026-08-31〜09-28）で
+# 前場は1日の出来高の中央値48%（4分の1〜4分の3の範囲で40〜56%）だったので、前場だけで1日平均の1.5倍＝
+# ふだんのペースの約3倍を同じ目安にする。取引時間中の途中の値（intraday）は割合が決まらないので出来高では見ない
+NOTABLE_VR_AM = 1.5
+AM_SHARE = 0.48
+AM_CLOSE = pd.Timedelta(hours=11, minutes=30)   # 前場の引け。昼の実行では、これ以降の開示は後場の材料
 NOTABLE_IDIO = 0.07        # 上場直後などで普段の値動きが測れないときは、業種との差7%以上
 SIGMA_DAYS = 60
 SIGMA_MIN = 40
@@ -280,7 +286,7 @@ def _sector_returns(R: np.ndarray, b: np.ndarray, sectors: pd.Series) -> tuple[n
 
 
 def _prepare(disc: pd.DataFrame | None, dates: pd.DatetimeIndex, codes: set) -> pd.DataFrame:
-    cols = ["time", "code", "title", "url", "category", "kind", "text", "day"]
+    cols = ["time", "code", "title", "url", "category", "kind", "text", "day", "pending"]
     if disc is None or disc.empty:
         return pd.DataFrame(columns=cols)
     d = disc[disc["code"].isin(codes)].drop_duplicates(["time", "code", "title"]).copy()
@@ -292,6 +298,7 @@ def _prepare(disc: pd.DataFrame | None, dates: pd.DatetimeIndex, codes: set) -> 
     d["kind"] = [p[1] for p in parts]
     d["text"] = [p[2] for p in parts]
     d["day"] = effective_day(d["time"], dates)
+    d["pending"] = np.where(d["day"].isna(), "next", "")   # next = 次の取引日の材料 / pm = 後場の材料
     return d[cols].sort_values("time").reset_index(drop=True)
 
 
@@ -339,8 +346,12 @@ def _short_summary(short: pd.DataFrame | None, since: pd.Timestamp | None = None
     return out
 
 
-def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
-    """p は data.Panel、base は「終値100円以上で売買のあった日」の表、now は日本時間の現在時刻。"""
+def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str = "close") -> Reasons:
+    """p は data.Panel、base は「終値100円以上で売買のあった日」の表、now は日本時間の現在時刻。
+
+    session が am（前場の引け後の実行）のときは、最新日の出来高を前場の分として見て、
+    11:30 以降の開示はその日の前場の理由にしない（後場の材料として一覧に出す）。
+    """
     n = WINDOW_DAYS + SIGMA_DAYS + 25
     c = p.close.iloc[-n:]
     dates, codes = c.index, c.columns
@@ -364,7 +375,13 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
     prev_pos = pd.DataFrame(np.where(valid, np.arange(len(dates), dtype=float)[:, None], np.nan)).ffill().shift(1).to_numpy()
 
     disc = _prepare(ex.disclosures, p.dates, set(codes))
+    if session == "am" and len(disc):
+        late = (disc["day"] == dates[-1]) & (disc["time"] >= dates[-1] + AM_CLOSE)
+        disc.loc[late, "day"] = pd.NaT
+        disc.loc[late, "pending"] = "pm"
     by_code = {k: g for k, g in disc.groupby("code")} if len(disc) else {}
+    # 最新日の出来高の目安（昼の実行は前場の分だけ・取引時間中の途中は出来高では見ない）
+    vr_last = {"am": NOTABLE_VR_AM, "intraday": np.inf}.get(session, NOTABLE_VR)
     short = _short_summary(ex.short)                                    # 表示用（数日分の報告）
     short_recent = _short_summary(ex.short, since=dates[-1] - SHORT_RECENT)   # 手がかり用
     margin = _margin_summary(ex.margin, ex.margin_date, vavg.iloc[-1])
@@ -396,17 +413,23 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
         lo, hi = prev_date(i, j).date(), dates[i].date()
         return all(d.date() in got_days for d in pd.date_range(lo, hi))
 
+    def vol_words(i: int, vr: float) -> str:
+        if i == last and session == "am":
+            return f"前場だけで出来高が1日平均の{vr:.1f}倍（ふだんのペースの約{vr / AM_SHARE:.0f}倍）"
+        return f"出来高が20日平均の{vr:.1f}倍"
+
     def clues(i: int, j: int) -> list[dict]:
         code, r, z, vr = codes[j], R[i, j], Z[i, j], VR[i, j]
+        vr_th = vr_last if i == last else NOTABLE_VR
         out = []
-        if vr >= NOTABLE_VR and abs(r) < QUIET_RET and (np.isnan(z) or abs(z) < QUIET_Z):
+        if vr >= vr_th and abs(r) < QUIET_RET and (np.isnan(z) or abs(z) < QUIET_Z):
             if dates[i] in last_rights_days:
                 out.append({"key": "volume", "short": "権利取りの売買",
                             "text": f"{dates[i].month}月末の権利付き最終日（配当・優待の権利を得られる最後の日）。"
-                                    f"出来高が20日平均の{vr:.1f}倍に増えたのに値動きは小さく、権利取りの売買とみられる"})
+                                    f"{vol_words(i, vr)}に増えたのに値動きは小さく、権利取りの売買とみられる"})
             else:
                 out.append({"key": "volume", "short": "出来高急増・値動き小",
-                            "text": f"出来高が20日平均の{vr:.1f}倍に増えたのに、値動きは小さい"
+                            "text": f"{vol_words(i, vr)}に増えたのに、値動きは小さい"
                                     "（指数の入れ替えや大口の売買で起きやすい形）"})
         if i == last:
             heat = [FLAG_NAMES[ch] for ch in flags.get(code, "") if ch in HEAT_FLAGS]
@@ -476,6 +499,8 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
         if cl:
             return "supply", cl[0]["short"], cl, True
         vr = VR[i, j]
+        if i == last and session == "am":
+            return "unknown", "開示なし" + (f"・前場の出来高{vr:.1f}倍" if vr >= 1 else ""), [], True
         return "unknown", "開示なし" + (f"・出来高{vr:.1f}倍" if vr >= 2 else ""), [], True
 
     labels: dict = {}
@@ -486,7 +511,7 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
         with np.errstate(invalid="ignore"):
             ok = B[i] & ~np.isnan(r)
             big = np.where(np.isnan(z), np.abs(idio) >= NOTABLE_IDIO, np.abs(z) >= NOTABLE_Z)
-            notable = ok & (big | (vr >= NOTABLE_VR))
+            notable = ok & (big | (vr >= (vr_last if i == last else NOTABLE_VR)))
             market_move = (ok & ~big & (np.abs(r) >= MARKET_RET) & (np.abs(s) >= MARKET_SECTOR)
                            & (np.sign(r) == np.sign(s)))
         day = dates[i].strftime("%Y-%m-%d")
@@ -518,6 +543,7 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
         label, text, cl, checked = last_detail.get(code, (None, None, [], True))
         detail[code] = {
             "date": day,
+            "session": session,
             "label": label, "text": text,
             "notable": code in last_detail,
             "checked": bool(checked) and bool(got_days),
@@ -555,6 +581,7 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp) -> Reasons:
     counts = pd.Series([v[0] for (d, _), v in labels.items() if d == day]).value_counts().to_dict()
     status = {
         "date": day,
+        "session": session,
         "disclosures": {
             "ok": ex.disclosures is not None and bool(got_days),
             "count": int(len(disc)),
@@ -583,6 +610,7 @@ def _item(x) -> dict:
         "kind": x.kind,
         "url": x.url if isinstance(x.url, str) else None,
         "day": None if pd.isna(x.day) else x.day.strftime("%Y-%m-%d"),   # None = まだ来ていない取引日
+        "pending": x.pending or None,     # next = 次の取引日の材料 / pm = 後場の材料（昼の実行だけ）
     }
 
 

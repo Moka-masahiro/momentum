@@ -118,6 +118,7 @@ def _home(st: State, rows: dict, market: dict, built_at: str) -> dict:
 
     return {
         "as_of": st.as_of,
+        "session": st.session,     # am = 前場の引け後の途中経過（夕方の実行で大引けに置き換わる）
         "computed_at": built_at,
         "universe": int(df["universe"].iloc[0]) if len(df) else 0,
         "market": {
@@ -164,6 +165,7 @@ def _latest(st: State, rows: dict) -> dict:
                for code, r in master.iterrows() if code not in rows]
     return {
         "as_of": st.as_of,
+        "session": st.session,
         "universe": int(st.latest["universe"].iloc[0]) if len(st.latest) else 0,
         "columns": list(LATEST_COLUMNS),
         "rows": [[x[c] for c in LATEST_COLUMNS] for x in rows.values()],
@@ -186,6 +188,7 @@ def _signals(st: State) -> dict:
         ]
     return {
         "as_of": st.as_of,
+        "session": st.session,
         "dates": [pd.Timestamp(d).strftime("%Y-%m-%d") for d in reversed(recent)],
         "events": events,
         "stats": st.stats,
@@ -300,6 +303,7 @@ def stock(st: State, code: str, r: dict, pct: dict, ranks: dict,
     return {
         **r,
         "as_of": st.as_of,
+        "session": st.session,
         "metrics": metrics,
         "radar": radar,
         "rank_history": ranks.get(lr["rank"]) if isinstance(lr["rank"], str) else None,

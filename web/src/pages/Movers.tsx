@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, Seg, WHY_LABEL, WhyNote } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, Seg, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
 import { num, slashDate } from "../format";
 import { back, go } from "../router";
 import type { MoversResponse, Why } from "../types";
@@ -38,12 +38,15 @@ export default function Movers() {
               options={[{ value: "" as const, label: `すべて ${base.length}` },
                 ...ORDER.map((k) => ({ value: k, label: `${WHY_LABEL[k]} ${count(k)}` }))]} />
             <div className="flex items-center justify-between mt-3">
-              <span className="note">{slashDate(data.as_of)} の値動き</span>
+              <span className="note flex items-center gap-1.5">
+                {slashDate(data.as_of)} の{data.session === "am" ? "前場の" : ""}値動き<SessionBadge session={data.session} />
+              </span>
               <label className="flex items-center gap-2 text-[13px] t-2">
                 <input type="checkbox" checked={liquidOnly} onChange={(e) => setLiquidOnly(e.target.checked)} />
                 流動性のある銘柄だけ
               </label>
             </div>
+            <SessionNote session={data.session} className="mt-2" />
             {st && !st.disclosures.ok && (
               <p className="note t-warn mt-2">開示を取得できなかったため、ニュースかどうかの判定をしていません。</p>
             )}
@@ -73,6 +76,8 @@ export default function Movers() {
           <Card title="判定のしかた" guide="movers-rules">
             <p className="prose !text-[13px]">
               業種平均との差が<b>普段の3倍以上</b>、または出来高が<b>20日平均の3倍以上</b>だった銘柄に、上から順に当てはめます。
+              前場の引け後のデータでは、出来高は<b>前場だけで1日平均の1.5倍以上</b>を目安にし（前場はふだん1日の出来高の約半分）、
+              11:30 より後の開示は前場の理由にしません（後場の材料として銘柄詳細に出します）。
             </p>
             <ul className="mt-2 space-y-2 text-[13px] leading-snug">
               <li><WhyNote row={{ why: "market" }} /> 業種全体が同じ向きに大きく動き、この銘柄だけの動きは目立たない。

@@ -4,9 +4,12 @@ name: daily
 
 on:
   schedule:
-    # 平日 17:17 JST（= 08:17 UTC）と、取りこぼしに備えた予備の 18:47 JST（= 09:47 UTC）。
-    # 毎時0分は定時実行が集中して GitHub に落とされることがある（最初の 17:00 の設定では、
-    # 2026-09-28 の実行が行われなかった）。JPX の信用残・品貸料は16時ごろ公表なので17時台で間に合う
+    # 平日 11:53 JST（= 02:53 UTC）: 前場の引け（11:30）のあと。Yahoo の値は20分ほど遅れるので11時50分過ぎにし、
+    #   後場の始まる12:30までに公開する。当日の日足は前場の値までの途中経過（画面に「前場」と出る）
+    # 平日 17:17 JST（= 08:17 UTC）と、取りこぼしに備えた予備の 18:47 JST（= 09:47 UTC）: 大引け後。
+    #   毎時0分は定時実行が集中して GitHub に落とされることがある（最初の 17:00 の設定では、
+    #   2026-09-28 の実行が行われなかった）。JPX の信用残・品貸料は16時ごろ公表なので17時台で間に合う
+    - cron: "53 2 * * 1-5"
     - cron: "17 8 * * 1-5"
     - cron: "47 9 * * 1-5"
   workflow_dispatch: # Actions の画面の「Run workflow」で手動実行できる
@@ -87,7 +90,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pipeline/last_run.json
-          git commit -m "data: $(jq -r .as_of pipeline/last_run.json)" || exit 0
+          git commit -m "data: $(jq -r 'if .session == "am" then .as_of + " 前場" elif .session == "intraday" then .as_of + " 途中" else .as_of end' pipeline/last_run.json)" || exit 0
           git push
 
   deploy:

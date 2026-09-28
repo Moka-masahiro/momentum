@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, Disclaimer, WHY_LABEL, WhyNote } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, Disclaimer, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
 import Spark from "../components/Spark";
 import { num, pct, slashDate, yen } from "../format";
 import { flag, go, setFlag } from "../router";
@@ -22,9 +22,13 @@ export default function Home({ onGuide }: { onGuide: () => void }) {
         </div>
         <div className="text-right">
           <div className="note !text-[11px]">データ日付</div>
-          <div className="text-[17px] font-bold num">{data ? slashDate(data.as_of) : "—"}</div>
+          <div className="flex items-center justify-end gap-1.5">
+            <SessionBadge session={data?.session} />
+            <span className="text-[17px] font-bold num">{data ? slashDate(data.as_of) : "—"}</span>
+          </div>
         </div>
       </header>
+      <SessionNote session={data?.session} className="mb-2 px-1" />
 
       {welcome && (
         <div className="card mb-3" style={{ borderColor: "rgba(232,199,111,0.5)" }}>
@@ -159,9 +163,12 @@ function MoversCard({ data }: { data: HomeData }) {
   if (st === undefined) return null; // 値動きの理由の無い古いデータ
   const rows = data.movers;
   const top = rows.filter((r) => r.why !== "market").slice(0, 5);
+  const am = data.session === "am";
   return (
-    <Card icon="pulse" title="きょう目立って動いた銘柄" link="一覧を見る" onLink={() => go("movers")} guide="movers"
-      sub="業種平均との差か出来高が、普段の3倍以上だった銘柄（流動性あり）と、その理由の手がかり">
+    <Card icon="pulse" title={am ? "前場で目立って動いた銘柄" : "きょう目立って動いた銘柄"} link="一覧を見る" onLink={() => go("movers")} guide="movers"
+      sub={am
+        ? "業種平均との差が普段の3倍以上、または前場だけで出来高が1日平均の1.5倍以上だった銘柄（流動性あり）と、その理由の手がかり"
+        : "業種平均との差か出来高が、普段の3倍以上だった銘柄（流動性あり）と、その理由の手がかり"}>
       {st === null ? (
         <p className="note">この日は値動きの理由を作れませんでした（材料の取得か計算に失敗）。</p>
       ) : (
