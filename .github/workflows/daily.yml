@@ -3,16 +3,23 @@
 name: daily
 
 on:
+  # 決まった時刻の実行は、外部のタイマー（timer/timer.gs。Google Apps Script）が workflow_dispatch（auto=true）で頼む。
+  #   平日 11:53 JST: 前場の引け（11:30）のあと。Yahoo の値は20分ほど遅れるので11時50分過ぎにし、
+  #     後場の始まる12:30までに公開する。当日の日足は前場の値までの途中経過（画面に「前場」と出る）
+  #   平日 17:17 JST と、取りこぼしに備えた予備の 18:47 JST: 大引け後。JPX の信用残・品貸料は16時ごろ公表なので17時台で間に合う
+  # GitHub 自身の定時実行（下の cron。時刻は同じ）は予備。2026-08-27 ごろから5〜7時間遅れて届くようになり
+  #   （9/29 は3回とも6時間12〜33分遅れ）、分をずらしても直らないと報告されている。
+  #   遅れて届いた分は、届いた時刻でどの回の分かを決め直す（pipeline/should_build.py）
   schedule:
-    # 平日 11:53 JST（= 02:53 UTC）: 前場の引け（11:30）のあと。Yahoo の値は20分ほど遅れるので11時50分過ぎにし、
-    #   後場の始まる12:30までに公開する。当日の日足は前場の値までの途中経過（画面に「前場」と出る）
-    # 平日 17:17 JST（= 08:17 UTC）と、取りこぼしに備えた予備の 18:47 JST（= 09:47 UTC）: 大引け後。
-    #   毎時0分は定時実行が集中して GitHub に落とされることがある（最初の 17:00 の設定では、
-    #   2026-09-28 の実行が行われなかった）。JPX の信用残・品貸料は16時ごろ公表なので17時台で間に合う
-    - cron: "53 2 * * 1-5"
-    - cron: "17 8 * * 1-5"
-    - cron: "47 9 * * 1-5"
-  workflow_dispatch: # Actions の画面の「Run workflow」で手動実行できる
+    - cron: "53 2 * * 1-5" # 11:53 JST
+    - cron: "17 8 * * 1-5" # 17:17 JST
+    - cron: "47 9 * * 1-5" # 18:47 JST
+  workflow_dispatch: # Actions の画面の「Run workflow」で手動実行できる（auto を外したままなら、いつでも作り直す）
+    inputs:
+      auto:
+        description: 外部のタイマーからの自動実行（手で動かすときは外したまま）
+        type: boolean
+        default: false
 
 permissions:
   contents: write # 実行記録（pipeline/last_run.json）をコミットするため
@@ -24,9 +31,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 定時実行のとき、その日の17時以降に作ったデータがもう公開済みなら何もしない
-  # （予備の時刻の実行は、ふだんここで終わる）。朝や日中に手動で作った分は、大引け後の
-  # データではないので止めない。手動の「Run workflow」はいつでも作り直す
+  # 自動の実行（外部のタイマー・GitHub の定時実行）は、届いた時刻の回（前場の引け後・大引け後）の
+  # データがもう公開済みなら何もしない（予備の時刻の実行は、ふだんここで終わる）。どちらの回の時間帯でもない
+  # 時刻に遅れて届いた分も何もしない（pipeline/should_build.py）。手動の「Run workflow」はいつでも作り直す
   check:
     runs-on: ubuntu-latest
     outputs:
@@ -34,15 +41,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+          AUTO: ${{ inputs.auto }}
+          BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # 実行が順番待ちの間に、前の実行が記録を更新していることがあるので、最新の main から読む
-          git fetch --depth=1 origin "${{ github.event.repository.default_branch }}"
-          built=$(git show FETCH_HEAD:pipeline/last_run.json | jq -r '.built // ""')
-          after_close="$(TZ=Asia/Tokyo date +%F) 17:00"
-          echo "event=${{ github.event_name }} built=$built after_close=$after_close"
-          if [ "${{ github.event_name }}" = "schedule" ] && [[ ! "$built" < "$after_close" ]]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
+          git fetch --depth=1 origin "$BRANCH"
+          git show FETCH_HEAD:pipeline/last_run.json | python3 pipeline/should_build.py
 
   build:
     needs: check

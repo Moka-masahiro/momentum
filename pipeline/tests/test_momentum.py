@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import build  # noqa: E402
 import fetch  # noqa: E402
 import secure  # noqa: E402
+import should_build  # noqa: E402
 from momentum import data, export, indicators as ind, reasons as rsn, signals as sig  # noqa: E402
 
 
@@ -383,6 +384,25 @@ def test_session_from_time_of_run():
     assert build.session_of(at(8, 0), tue) == "close"
     # 祝日など当日の日足が無い日は、昼でも前の取引日の終値なので close
     assert build.session_of(at(11, 53), date(2026, 9, 28)) == "close"
+
+
+def test_should_build_by_arrival_time():
+    # GitHub の定時実行が6時間あまり遅れて届いた 2026-09-29〜30 の実際の順番で確かめる
+    from datetime import datetime
+    at = lambda s: datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=should_build.JST)  # noqa: E731
+    auto = lambda now, built: should_build.decide(at(now), built, manual=False)[0]  # noqa: E731
+    assert not auto("2026-09-29 18:05", "2026-09-29 17:12")   # 11:53 の分: 大引け後の分が公開済み
+    assert not auto("2026-09-29 23:50", "2026-09-29 17:12")   # 17:17 の分
+    assert not auto("2026-09-30 01:07", "2026-09-29 17:12")   # 18:47 の分: 夜中に前日分を作り直していた
+    assert auto("2026-09-30 11:53", "2026-09-29 17:12")       # 前場の引け後
+    assert not auto("2026-09-30 12:05", "2026-09-30 11:46")
+    assert auto("2026-09-30 17:17", "2026-09-30 11:46")       # 大引け後
+    assert auto("2026-09-30 18:05", "2026-09-30 11:46")       # 夕方の回が抜けた日は、遅れて届いた昼の分が代わる
+    assert not auto("2026-09-30 18:47", "2026-09-30 17:48")   # 予備
+    assert auto("2026-09-30 17:17", "")                        # 記録が読めなければ作る側に倒す
+    for now in ("2026-09-30 09:40", "2026-09-30 14:00", "2026-09-30 16:30", "2026-10-03 17:30"):
+        assert not auto(now, "2026-09-29 17:12"), now          # 朝・取引時間中・大引け直後・土曜
+    assert should_build.decide(at("2026-09-30 01:07"), "2026-09-30 00:50", manual=True)[0]   # 手動はいつでも
 
 
 def test_morning_session_uses_morning_volume_and_cutoff():
