@@ -5,6 +5,7 @@ import Lock from "./components/Lock";
 import SearchSheet from "./components/SearchSheet";
 import { Icon, Sheet } from "./components/ui";
 import Home from "./pages/Home";
+import Margin from "./pages/Margin";
 import Market from "./pages/Market";
 import Movers from "./pages/Movers";
 import Ranking from "./pages/Ranking";
@@ -93,6 +94,9 @@ function Main() {
       break;
     case "movers":
       view = <Movers />;
+      break;
+    case "margin":
+      view = <Margin />;
       break;
     case "verify":
       view = <Verify />;

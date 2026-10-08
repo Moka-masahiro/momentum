@@ -90,6 +90,49 @@ export interface Margin {
   ratio: number | null;
   buy_days: number | null;    // 買い残が直前20日平均の出来高の何日分か
   sell_days: number | null;
+  // 上のうち制度信用の分（一般信用を除く。2026-10 より前のデータには無い）
+  std_buy?: number;
+  std_buy_chg?: number | null;
+  std_sell?: number;
+  std_sell_chg?: number | null;
+  std_ratio?: number | null;        // 制度信用倍率＝制度信用の買い残÷売り残（売り残が無ければ null）
+  std_ratio_prev?: number | null;   // 前日の倍率
+  std_buy_days?: number | null;
+  std_sell_days?: number | null;
+  loan?: boolean | null;            // 貸借銘柄（制度信用で売れる）か
+}
+
+/** 制度信用の残高と倍率（一覧用。pipeline/momentum/export.py の MARGIN_COLUMNS） */
+export interface StdMargin {
+  loan: boolean | null;
+  buy: number;
+  buy_chg: number | null;
+  sell: number;
+  sell_chg: number | null;
+  ratio: number | null;
+  ratio_prev: number | null;
+  buy_days: number | null;
+  sell_days: number | null;
+}
+
+/** 全銘柄を合計した制度信用倍率（残高の合計どうしの比。ETF・REIT は対象外）と、売り長の銘柄数 */
+export interface MarginSummary {
+  stocks: number;             // 信用残を読めた銘柄
+  rated: number;              // うち制度信用の売り残があり、倍率を出せる銘柄
+  short: number;              // うち1倍未満（売り長）
+  buy: number;
+  sell: number;
+  ratio: number | null;
+  ratio_prev: number | null;
+}
+
+export type MarginRow = StockRow & { m: StdMargin };
+
+export interface MarginResponse {
+  as_of: string;
+  date: string | null;        // 信用残の申込日（公表は次の営業日の16時ごろ）
+  summary: MarginSummary | null;   // null = 信用残を取れなかった
+  items: MarginRow[];
 }
 
 export interface SourceStatus {
@@ -172,6 +215,7 @@ export interface Home {
   };
   signals: { total: number; liquid: number; by_type: SignalTypeCount[] };
   reasons?: ReasonStatus | null;    // 値動きの理由の材料の取得状況（古いデータには無い）
+  margin?: (MarginSummary & { date: string | null }) | null;   // 全銘柄を合計した制度信用倍率（古いデータには無い）
   watchlist: StockRow[];
   movers: StockRow[];               // 流動性のある銘柄のうち、理由の付いたもの（画面側で作る）
 }

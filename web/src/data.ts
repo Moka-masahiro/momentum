@@ -13,6 +13,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   Home,
+  MarginResponse,
+  MarginSummary,
   MarketResponse,
   MoversResponse,
   RankingResponse,
@@ -21,6 +23,7 @@ import type {
   SignalGroup,
   SignalStats,
   SignalsResponse,
+  StdMargin,
   StockDetail,
   StockRow,
   VerifyResponse,
@@ -276,6 +279,14 @@ interface SignalsDoc {
   defs: { key: string; label: string; tone: "up" | "warn"; rule: string }[];
 }
 
+interface MarginDoc {
+  as_of: string;
+  date: string | null;
+  summary: MarginSummary | null;
+  columns: string[];
+  rows: unknown[][];
+}
+
 /** 理由の付いた銘柄を、業種との差の大きい順に（地合いは業種ごと動いただけなので後ろに回る） */
 function moverRows(l: Latest): StockRow[] {
   return l.rows
@@ -289,6 +300,7 @@ export const paths = {
   stock: (code: string) => `stock|${code}`,
   signals: (date?: string) => `signals|${date ?? ""}`,
   movers: "movers",
+  margin: "margin",
   market: "market",
   verify: "verify",
 };
@@ -334,6 +346,18 @@ export const api = {
       return { ...d, count: items.length, items, stats: s.stats[d.key] ?? null };
     });
     return { as_of: s.as_of, session: s.session ?? "close", date: target, dates: s.dates, total: today.length, groups };
+  },
+
+  /** 制度信用の残高のある銘柄（並べ替えと絞り込みは画面側）。銘柄名やランクは最新値から足す */
+  async margin(): Promise<MarginResponse> {
+    const [doc, l] = await Promise.all([load<MarginDoc>("margin"), latest()]);
+    const items = doc.rows.flatMap((a) => {
+      const o: Record<string, unknown> = {};
+      doc.columns.forEach((c, i) => (o[c] = a[i]));
+      const r = l.byCode.get(o.code as string);
+      return r ? [{ ...r, m: o as unknown as StdMargin }] : [];
+    });
+    return { as_of: doc.as_of, date: doc.date, summary: doc.summary, items };
   },
 
   market: () => load<MarketResponse>("market"),

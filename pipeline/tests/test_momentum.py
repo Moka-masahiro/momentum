@@ -351,6 +351,12 @@ def test_parse_margin_lines_rejoins_split_numbers():
     assert (df.at["1301", "buy"], df.at["1301", "buy_chg"], df.at["1301", "buy_ratio"]) == (154300, -3900, 1.3)
     assert (df.at["1377", "buy"], df.at["1377", "buy_chg"]) == (43200, 300)
     assert df.at["634A", "buy"] == 272900 and pd.isna(df.at["634A", "buy_chg"])
+    # 制度信用の分（内訳の並びは 一般信用 → 制度信用）と、貸借銘柄の印（貸＝制度信用で売れる）
+    assert (df.at["1301", "std_sell"], df.at["1301", "std_sell_chg"]) == (9300, 300)
+    assert (df.at["1301", "std_buy"], df.at["1301", "std_buy_chg"]) == (118900, -1800)
+    assert (df.at["1377", "std_sell"], df.at["1377", "std_buy"]) == (6500, 24900)
+    assert df.at["634A", "std_buy"] == 0 and pd.isna(df.at["634A", "std_buy_chg"])
+    assert df["loan"].to_dict() == {"1301": True, "1377": True, "634A": False, "4875": False}
 
 
 def test_heavy_short_interest_is_a_supply_clue_on_an_up_move():
@@ -370,6 +376,39 @@ def test_heavy_short_interest_is_a_supply_clue_on_an_up_move():
     ex.margin = margin.assign(buy=[110000, 90000])      # 1001 の信用倍率 5.5倍
     rs = rsn.compute(p, base, ex, last + pd.Timedelta(hours=17))
     assert rs.latest.at["1001", "why"] == "unknown"
+    assert "std_buy" not in rs.detail["1001"]["margin"]  # 内訳を持たない古い取得結果でも動く
+
+
+def test_standardized_margin_ratio_excludes_negotiable():
+    # 制度信用倍率＝制度信用の買い残÷売り残。一般信用の分は入れない
+    p, base, disc, days, last = _reason_panel()
+    margin = pd.DataFrame([
+        # 極洋 2026-09-25 申込み分: 売り残 9,300 はすべて制度信用、買い残 154,300 のうち制度信用は 118,900
+        {"code": "1000", "sell": 9300, "sell_chg": 300, "sell_ratio": 0.1, "buy": 154300, "buy_chg": -3900, "buy_ratio": 1.3,
+         "std_sell": 9300, "std_sell_chg": 300, "std_buy": 118900, "std_buy_chg": -1800, "loan": True},
+        # ユキグニファクトリー 2026-10-07: 貸借銘柄でなく、売り残 17,900 はすべて一般信用。合計の信用倍率は
+        # 3.55倍と出るが、制度信用では売れないので制度信用倍率は無い
+        {"code": "1001", "sell": 17900, "sell_chg": 0, "sell_ratio": 0.0, "buy": 63600, "buy_chg": 300, "buy_ratio": 0.2,
+         "std_sell": 0, "std_sell_chg": 0, "std_buy": 4300, "std_buy_chg": 100, "loan": False},
+        # 上場直後で前日比が無い
+        {"code": "1002", "sell": 500, "sell_chg": None, "sell_ratio": 0.0, "buy": 1000, "buy_chg": None, "buy_ratio": 0.0,
+         "std_sell": 400, "std_sell_chg": None, "std_buy": 100, "std_buy_chg": None, "loan": True},
+    ])
+    ex = rsn.Extras(disclosures=disc, disclosure_days=days, margin=margin, margin_date="2026-09-25")
+    m = {c: d["margin"] for c, d in rsn.compute(p, base, ex, last + pd.Timedelta(hours=17)).detail.items() if d["margin"]}
+    assert (m["1000"]["ratio"], m["1000"]["std_ratio"]) == (16.59, 12.785)      # 合計 154,300÷9,300 と 118,900÷9,300
+    assert m["1000"]["std_ratio_prev"] == 13.411                                 # 前日は 120,700÷9,000
+    assert (m["1000"]["std_buy_days"], m["1000"]["std_sell_days"], m["1000"]["loan"]) == (11.9, 0.9, True)
+    assert (m["1001"]["ratio"], m["1001"]["std_ratio"], m["1001"]["std_ratio_prev"], m["1001"]["loan"]) == (3.55, None, None, False)
+    assert (m["1002"]["std_ratio"], m["1002"]["std_ratio_prev"], m["1002"]["std_sell_chg"]) == (0.25, None, None)
+    # 市場全体は残高の合計どうしの比。前日は、前日比のある銘柄の「残高−前日比」の合計で出す
+    rows = [[c, x["loan"], x["std_buy"], x["std_buy_chg"], x["std_sell"], x["std_sell_chg"], x["std_ratio"],
+             x["std_ratio_prev"], x["std_buy_days"], x["std_sell_days"]] for c, x in m.items()]
+    s = export.margin_summary(rows)
+    assert (s["stocks"], s["rated"], s["short"]) == (3, 2, 1)
+    assert (s["buy"], s["sell"], s["ratio"]) == (123300, 9700, 12.71)
+    assert s["ratio_prev"] == 13.88                                              # (120,700 + 4,200) ÷ (9,000 + 0)
+    assert export.margin_summary([]) is None
 
 
 def test_session_from_time_of_run():

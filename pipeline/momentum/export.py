@@ -8,6 +8,7 @@
     market    地合いの推移（日経平均・市場区分の中央値・ランクB以上の比率）
     signals   直近20営業日のシグナル（その日の値動きの理由付き）と、種別ごとの過去の実績
     verify    検証（IC・ランク別・十分位・シグナル実績・分割補正の記録）
+    margin    制度信用倍率（制度信用の買い残÷売り残）の一覧と、全銘柄の合計
     stocks/<code>  1銘柄の詳細（チャート・指標・5角形・シグナル履歴・テクニカル整理・
                    値動きの理由・直近30日の開示）
 """
@@ -30,6 +31,9 @@ LATEST_COLUMNS = (
     "liquid", "base", "traded_today", "last_date", "signals_today", "t",
     "why", "why_text", "idio", "vr",
 )
+# 制度信用倍率の一覧の列（残高は制度信用の分だけ。reasons._std_margin）
+MARGIN_COLUMNS = ("code", "loan", "buy", "buy_chg", "sell", "sell_chg", "ratio", "ratio_prev",
+                  "buy_days", "sell_days")
 
 
 def _r(x, nd: int = 1):
@@ -88,9 +92,11 @@ def documents(st: State) -> Iterator[tuple[str, dict]]:
     latest = st.latest if st.reasons is None else st.latest.join(st.reasons.latest)
     rows = {code: row(code, r) for code, r in latest.iterrows()}
     market = _market(st)
-    yield "home", _home(st, rows, market, built_at)
+    margin = _margin(st)
+    yield "home", _home(st, rows, market, built_at, margin)
     yield "latest", _latest(st, rows)
     yield "market", {"as_of": st.as_of, **market}
+    yield "margin", margin
     yield "signals", _signals(st)
     yield "verify", {"as_of": st.as_of, "computed_at": built_at, "signal_stats": st.stats,
                      "signal_defs": signal_defs(), "adjustments": st.panel.adjustments, **st.validation}
@@ -106,7 +112,7 @@ def signal_defs() -> list[dict]:
     return [{"key": s.key, "label": s.label, "tone": s.tone, "rule": s.rule} for s in sig.SIGNALS]
 
 
-def _home(st: State, rows: dict, market: dict, built_at: str) -> dict:
+def _home(st: State, rows: dict, market: dict, built_at: str, margin: dict) -> dict:
     ev_today = st.events[st.events["date"] == st.panel.dates[-1]]
     counts = ev_today.groupby("key").size().to_dict()
     df = st.latest
@@ -133,6 +139,8 @@ def _home(st: State, rows: dict, market: dict, built_at: str) -> dict:
         "verify_summary": _verify_summary(st),
         # 値動きの理由の材料の取得状況（None = 理由を作れなかった）
         "reasons": _finite(st.reasons.status) if st.reasons else None,
+        # 全銘柄を合計した制度信用倍率と、売り長の銘柄数（None = 信用残を取れなかった）
+        "margin": {"date": margin["date"], **margin["summary"]} if margin["summary"] else None,
         "signals": {
             "total": int(len(ev_today)),
             "liquid": int(ev_today["liquid"].sum()) if len(ev_today) else 0,
@@ -170,6 +178,49 @@ def _latest(st: State, rows: dict) -> dict:
         "columns": list(LATEST_COLUMNS),
         "rows": [[x[c] for c in LATEST_COLUMNS] for x in rows.values()],
         "missing": missing,   # 銘柄マスタにはあるが日足が取れなかった銘柄（検索には出す）
+    }
+
+
+def _margin(st: State) -> dict:
+    """制度信用の残高と倍率の一覧（JPX「銘柄別信用取引残高」のうち制度信用の分）。
+
+    date は申込日（公表は次の営業日の16時ごろなので、最新日の前の取引日になる）。
+    信用残を取れなかった日は rows が空で summary が None。
+    """
+    rs = st.reasons
+    rows = []
+    for code, d in (rs.detail.items() if rs else ()):
+        m = d.get("margin")
+        if m and "std_buy" in m:
+            rows.append([code, m["loan"], m["std_buy"], m["std_buy_chg"], m["std_sell"], m["std_sell_chg"],
+                         m["std_ratio"], m["std_ratio_prev"], m["std_buy_days"], m["std_sell_days"]])
+    return _finite({
+        "as_of": st.as_of,
+        "date": rs.status["margin"]["date"] if rs else None,
+        "summary": margin_summary(rows),
+        "columns": list(MARGIN_COLUMNS),
+        "rows": rows,
+    })
+
+
+def margin_summary(rows: list[list]) -> dict | None:
+    """全銘柄を合計した制度信用倍率（一覧の銘柄の残高の合計どうしの比。ETF・REIT は対象外）と、売り長の銘柄数。
+
+    前日の倍率は、前日比のある銘柄の「残高−前日比」の合計で出す（前日比の無い上場直後の銘柄は、前日の残高が無い）。
+    """
+    if not rows:
+        return None
+    buy, sell = sum(r[2] for r in rows), sum(r[4] for r in rows)
+    known = [r for r in rows if r[3] is not None and r[5] is not None]
+    prev_buy, prev_sell = sum(r[2] - r[3] for r in known), sum(r[4] - r[5] for r in known)
+    rated = [r[6] for r in rows if r[6] is not None]
+    return {
+        "stocks": len(rows),                    # 信用残を読めた銘柄
+        "rated": len(rated),                    # うち制度信用の売り残があり、倍率を出せる銘柄
+        "short": sum(x < 1 for x in rated),     # うち1倍未満（売り長）
+        "buy": buy, "sell": sell,
+        "ratio": _r(buy / sell, 2) if sell else None,
+        "ratio_prev": _r(prev_buy / prev_sell, 2) if prev_sell else None,
     }
 
 

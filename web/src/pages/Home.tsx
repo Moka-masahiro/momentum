@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api, paths, useData } from "../data";
 import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, Disclaimer, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
 import Spark from "../components/Spark";
-import { num, pct, slashDate, yen } from "../format";
+import { mdDate, num, pct, slashDate, yen } from "../format";
 import { flag, go, setFlag } from "../router";
 import type { Home as HomeData, StockRow, Why } from "../types";
 
@@ -61,6 +61,7 @@ export default function Home({ onGuide }: { onGuide: () => void }) {
           <MoversCard data={data} />
           <RankingCard rows={data.ranking} universe={data.universe} />
           <SignalCard data={data} />
+          <MarginCard m={data.margin} />
           <WatchCard rows={data.watchlist} />
           <Card icon="flask" title="この数字は当たる？" link="検証を見る" onLink={() => go("verify")} guide="verify-home">
             <p className="prose !text-[13px]">
@@ -255,6 +256,31 @@ function SignalCard({ data }: { data: HomeData }) {
             ? "どのシグナルも、偶然と区別できる差はありません。"
             : `${data.verify_summary.signals_significant} 種類のシグナルに、偶然とは言いにくい差があります（検証画面）。`}
       </p>
+    </Card>
+  );
+}
+
+function MarginCard({ m }: { m: HomeData["margin"] }) {
+  if (m === undefined) return null; // 制度信用倍率の無い古いデータ
+  return (
+    <Card icon="scale" title="制度信用倍率" link="一覧を見る" onLink={() => go("margin")} guide="margin-home"
+      sub={m ? `制度信用の買い残 ÷ 売り残（${mdDate(m.date)} 申込み分）` : undefined}>
+      {m === null ? (
+        <p className="note">この日は JPX の信用残を取得できませんでした。</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          <button className="tile pressable" onClick={() => go("margin")}>
+            <div className="text-[12px] t-2">全銘柄の合計</div>
+            <div className="text-[20px] font-bold num">{num(m.ratio, 2)}<span className="text-[13px] t-2 ml-0.5">倍</span></div>
+            <div className="note !text-[11px]">前日 {num(m.ratio_prev, 2)}倍</div>
+          </button>
+          <button className="tile pressable" onClick={() => go("margin")}>
+            <div className="text-[12px] t-2">売り長（1倍未満）</div>
+            <div className="text-[20px] font-bold num">{num(m.short)}<span className="text-[13px] t-2 ml-0.5">銘柄</span></div>
+            <div className="note !text-[11px]">倍率のある {num(m.rated)} 銘柄中</div>
+          </button>
+        </div>
+      )}
     </Card>
   );
 }

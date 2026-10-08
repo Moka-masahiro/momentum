@@ -396,7 +396,8 @@ def fetch_premium(timeout: int = 60) -> pd.DataFrame:
 def fetch_margin_all(timeout: int = 120) -> tuple[pd.DataFrame, str | None]:
     """全銘柄の信用取引残高（JPX「銘柄別信用取引残高」。2026-09-28 から毎日・PDF のみ）。
 
-    戻り値は (表, 申込日)。表の列: code, sell, sell_chg, sell_ratio, buy, buy_chg, buy_ratio
+    戻り値は (表, 申込日)。表の列: code, sell, sell_chg, sell_ratio, buy, buy_chg, buy_ratio と、
+    そのうち制度信用の分 std_sell, std_sell_chg, std_buy, std_buy_chg、貸借銘柄かどうかの loan
     （株数。ratio は上場株式数に対する%。前日比が無い日は None）。PDF の読み取りに約40秒かかる。
     """
     links = _jpx_find(MARGIN_FILE, timeout)
@@ -417,8 +418,12 @@ def fetch_margin_all(timeout: int = 120) -> tuple[pd.DataFrame, str | None]:
 # 一般信用の買残, 前日比, 制度信用の買残, 前日比（N=残高, C=前日比, R=上場比）
 _MARGIN_KINDS = "NCRNCRNCNCNCNC"
 # コード（5桁の末尾0。優先株・社債型種類株式は末尾が0以外なので読まない）と ISIN（外国企業の株は
-# US・KY などの ISIN。最初は JP だけにしていて、メディシノバなど3銘柄を取りこぼした）
-_MARGIN_LINE = re.compile(r"(\d{3}[0-9A-Z])\s?0\s+[A-Z]{2}[0-9A-Z]{9,10}\s?[0-9A-Z]?\s*株数\s*Shs\.\s*(.*)$")
+# US・KY などの ISIN。最初は JP だけにしていて、メディシノバなど3銘柄を取りこぼした）。
+# コードの前の印は、貸＝貸借銘柄（制度信用で売れる）、制＝貸借銘柄でない制度信用銘柄（買いだけ）、他＝それ以外
+_MARGIN_LINE = re.compile(
+    r"(?:(貸|制|他)\s*)?(\d{3}[0-9A-Z])\s?0\s+[A-Z]{2}[0-9A-Z]{9,10}\s?[0-9A-Z]?\s*株数\s*Shs\.\s*(.*)$")
+_MARGIN_COLUMNS = ["code", "sell", "sell_chg", "sell_ratio", "buy", "buy_chg", "buy_ratio",
+                   "std_sell", "std_sell_chg", "std_buy", "std_buy_chg", "loan"]
 _NUM = re.compile(r"^\d{1,3}(,\d{3})*$")
 _RATIO = re.compile(r"^(\d+\.\d+%|\*)$")
 
@@ -430,6 +435,10 @@ def parse_margin_lines(lines: list[str]) -> pd.DataFrame:
     そこで、割れた数字のつなぎ方をすべて試し、「売残＝一般信用＋制度信用」「買残＝一般信用＋制度信用」と
     前日比の同じ関係が**すべて合う**つなぎ方を採る。合うものが1通りに決まらない行は読まない。
     小計・合計の行と、優先株・社債型種類株式（コードの末尾が0以外）の行も読まない。
+
+    内訳の並びは PDF の見出しのとおり、売残・買残とも「一般信用 → 制度信用」。足し算の検算は並びが
+    逆でも通るので、見出しと総合計の行で確かめた（2026-10-07 申込み分: 読めた 4,243 行の合計と総合計の
+    差は、読まない優先株など7行の分だけ）。
     """
     rows = {}
     for line in lines:
@@ -438,14 +447,18 @@ def parse_margin_lines(lines: list[str]) -> pd.DataFrame:
         m = _MARGIN_LINE.search(line)
         if not m:
             continue
-        found = {tuple(f) for f in _margin_fields(m.group(2).split()) if _margin_consistent(f)}
+        found = {tuple(f) for f in _margin_fields(m.group(3).split()) if _margin_consistent(f)}
         if len(found) != 1:
             continue
-        sell, sell_chg, sell_ratio, buy, buy_chg, buy_ratio = next(iter(found))[:6]
-        rows[m.group(1)] = {"sell": sell, "sell_chg": sell_chg, "sell_ratio": _pct_or_none(sell_ratio),
-                            "buy": buy, "buy_chg": buy_chg, "buy_ratio": _pct_or_none(buy_ratio)}
+        (sell, sell_chg, sell_ratio, buy, buy_chg, buy_ratio,
+         _, _, std_sell, std_sell_chg, _, _, std_buy, std_buy_chg) = next(iter(found))
+        rows[m.group(2)] = {"sell": sell, "sell_chg": sell_chg, "sell_ratio": _pct_or_none(sell_ratio),
+                            "buy": buy, "buy_chg": buy_chg, "buy_ratio": _pct_or_none(buy_ratio),
+                            "std_sell": std_sell, "std_sell_chg": std_sell_chg,
+                            "std_buy": std_buy, "std_buy_chg": std_buy_chg,
+                            "loan": m.group(1) == "貸" if m.group(1) else None}
     df = pd.DataFrame.from_dict(rows, orient="index").rename_axis("code").reset_index()
-    return df if len(df) else pd.DataFrame(columns=["code", "sell", "sell_chg", "sell_ratio", "buy", "buy_chg", "buy_ratio"])
+    return df if len(df) else pd.DataFrame(columns=_MARGIN_COLUMNS)
 
 
 def _margin_fields(tokens: list[str]) -> list[list]:

@@ -226,6 +226,7 @@ function ReasonCard({ d }: { d: StockDetail }) {
         需給の手がかりは状況証拠で、原因の証明ではありません。
         機関の空売り残高は、発行済株式の0.5%以上を空売りしている機関の報告分{r.short ? `（${mdDate(r.short.date)} 計算分まで）` : ""}。
         {r.margin && `信用残は ${mdDate(r.margin.date)} 申込み時点（JPX・毎日16時公表）で、日数は直前20日平均の出来高の何日分か。`}
+        {r.margin?.std_buy != null && "制度信用倍率は、一般信用（証券会社ごとの無期限・1日信用など）を除いた制度信用だけの買い残÷売り残。"}
         逆日歩は権利取りの時期に優待目当てでも付くため、判定には使わず表示だけにしています。
       </p>
       <DisclosureList items={d.disclosures ?? []} />
@@ -247,6 +248,30 @@ function MarginRows({ m }: { m: Margin }) {
         <td style={{ whiteSpace: "normal" }}>{shares(m.sell)}{chg(m.sell_chg)}{days(m.sell_days)}</td>
       </tr>
       <tr><td>信用倍率（買い÷売り）</td><td>{m.ratio != null ? `${num(m.ratio, 2)}倍` : "売り残なし"}</td></tr>
+      {m.std_buy != null && m.std_sell != null && (
+        <>
+          <tr>
+            <td>うち制度信用の買い残</td>
+            <td style={{ whiteSpace: "normal" }}>{shares(m.std_buy)}{chg(m.std_buy_chg ?? null)}{days(m.std_buy_days ?? null)}</td>
+          </tr>
+          <tr>
+            <td>うち制度信用の売り残</td>
+            <td style={{ whiteSpace: "normal" }}>
+              {m.std_sell === 0 && m.loan === false
+                ? "なし（貸借銘柄ではないので、制度信用では売れない）"
+                : `${shares(m.std_sell)}${chg(m.std_sell_chg ?? null)}${days(m.std_sell_days ?? null)}`}
+            </td>
+          </tr>
+          <tr>
+            <td>制度信用倍率</td>
+            <td>
+              {m.std_ratio != null
+                ? `${num(m.std_ratio, 2)}倍${m.std_ratio_prev != null ? `（前日 ${num(m.std_ratio_prev, 2)}倍）` : ""}`
+                : "売り残なし"}
+            </td>
+          </tr>
+        </>
+      )}
     </>
   );
 }

@@ -210,7 +210,8 @@ class Extras:
     flags: pd.DataFrame | None = None           # code, flags
     flags_date: str | None = None
     premium: pd.DataFrame | None = None         # code, date, rate, max_rate
-    margin: pd.DataFrame | None = None          # code, sell, sell_chg, sell_ratio, buy, buy_chg, buy_ratio
+    margin: pd.DataFrame | None = None          # code, sell, sell_chg, sell_ratio, buy, buy_chg, buy_ratio,
+                                                # std_sell, std_sell_chg, std_buy, std_buy_chg, loan（fetch_margin_all）
     margin_date: str | None = None              # 信用残の申込日（最新日の前の取引日になる）
     errors: dict = field(default_factory=dict)  # 取得に失敗したもの → 理由
 
@@ -265,8 +266,34 @@ def _margin_summary(margin: pd.DataFrame | None, day: str | None, vavg: pd.Serie
             "ratio": round(r.buy / r.sell, 2) if r.sell > 0 else None,          # 信用倍率（買い残÷売り残）
             "buy_days": round(r.buy / va, 1) if va else None,
             "sell_days": round(r.sell / va, 1) if va else None,
+            **_std_margin(r, va),
         }
     return out
+
+
+def _std_margin(r, va: float | None) -> dict:
+    """信用残のうち制度信用の分と、制度信用倍率（制度信用の買い残÷売り残）。
+
+    一般信用（証券会社ごとの無期限・1日信用など）を除いた分。貸借銘柄（loan）でなければ制度信用では
+    売れないので、ふつうは売り残が無く倍率も無い（倍率は印ではなく、売り残の有無で出す）。
+    前日の倍率は、残高から前日比を引いた前日の残高で出す。
+    """
+    buy, sell = getattr(r, "std_buy", None), getattr(r, "std_sell", None)
+    if buy is None or sell is None or pd.isna(buy) or pd.isna(sell):
+        return {}       # 内訳を持たない古い取得結果（手元のキャッシュ）
+    buy_chg, sell_chg = _int_or_none(r.std_buy_chg), _int_or_none(r.std_sell_chg)
+    loan = getattr(r, "loan", None)
+    prev = None
+    if buy_chg is not None and sell_chg is not None and sell - sell_chg > 0:
+        prev = round((buy - buy_chg) / (sell - sell_chg), 3)
+    return {
+        "std_buy": int(buy), "std_buy_chg": buy_chg, "std_sell": int(sell), "std_sell_chg": sell_chg,
+        "std_ratio": round(buy / sell, 3) if sell > 0 else None,
+        "std_ratio_prev": prev,
+        "std_buy_days": round(buy / va, 1) if va else None,
+        "std_sell_days": round(sell / va, 1) if va else None,
+        "loan": None if loan is None or pd.isna(loan) else bool(loan),
+    }
 
 
 def _sector_returns(R: np.ndarray, b: np.ndarray, sectors: pd.Series) -> tuple[np.ndarray, np.ndarray]:

@@ -45,6 +45,8 @@ export function Icon({ name, size = 20 }: { name: string; size?: number }) {
       return <svg {...s}><path {...P} d="M9 3h6M10 3v6l-5.5 9.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3" /><path {...P} d="M7.5 15h9" /></svg>;
     case "pulse":
       return <svg {...s}><path {...P} d="M3 12h4l2.5-6 5 12 2.5-6h4" /></svg>;
+    case "scale":
+      return <svg {...s}><path {...P} d="M12 4v16M7.5 20h9M5 7h14M5 7l-2.5 6a2.6 2.6 0 0 0 5 0zM19 7l-2.5 6a2.6 2.6 0 0 0 5 0z" /></svg>;
     default:
       return null;
   }
