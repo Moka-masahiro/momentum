@@ -1,6 +1,6 @@
 {
- "built": "2026-10-07 18:30",
- "as_of": "2026-10-07",
+ "built": "2026-10-08 18:38",
+ "as_of": "2026-10-08",
  "session": "close",
  "stocks_listed": 3707,
  "stocks_fetched": 3707,
@@ -8,9 +8,9 @@
  "adjustments": 3,
  "files": 3712,
  "size_mb": 30.6,
- "elapsed_sec": 478.0,
+ "elapsed_sec": 419.9,
  "reasons": {
-  "disclosures": 3725,
+  "disclosures": 3731,
   "disclosure_days_failed": 0,
   "short": true,
   "flags": true,
