@@ -184,6 +184,8 @@ def test_classify_disclosure_titles():
         "2026年12月期 第2四半期（中間期）決算 質疑応答集": ("定例", "routine", "第2四半期（中間期）決算 質疑応答集"),
         "監査役の辞任及び補欠監査役の監査役就任に関するお知らせ": ("定例", "routine", "監査役の辞任及び補欠監査役の監査役就任"),
         "代表取締役の異動に関するお知らせ": ("代表の交代", "news", "社長・代表の交代"),
+        # 表記の揺れ（「子会社等の異動」「株式譲渡」）で「その他」になっていた（2026-10-09 の HOYA）
+        "子会社等の異動（株式譲渡）に関するお知らせ": ("TOB・M&A", "news", "子会社等の異動（株式譲渡）"),
     }
     for title, want in cases.items():
         assert rsn.classify(title) == want, (title, rsn.classify(title))
