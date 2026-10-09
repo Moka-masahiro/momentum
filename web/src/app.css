@@ -255,6 +255,12 @@ button.tile:active,
   white-space: nowrap;
   margin-top: 1px;
 }
+/* 印が多い行（ウォッチリスト）は折り返す */
+.list-name small.list-sub.wrap {
+  flex-wrap: wrap;
+  white-space: normal;
+  row-gap: 3px;
+}
 .why-text {
   min-width: 0;
   overflow: hidden;

@@ -42,6 +42,7 @@ export interface StockRow {
   why_text?: string | null; // 短い文言（開示の要約・手がかり）
   idio?: number | null;     // 業種の中央値との差（%）
   vr?: number | null;       // 出来高 ÷ 直前20日平均
+  std_ratio?: number | null;  // 制度信用倍率（1倍未満＝売り長。倍率の無い銘柄は null）
   disc?: string | null;       // これからの材料（引け後の開示など）の分類。無ければ null
   disc_text?: string | null;  // その短い文言
 }

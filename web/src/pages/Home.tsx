@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, DiscChip, ErrorBox, Icon, Loading, RankBadge, Disclaimer, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
+import { Card, Delta, DiscChip, ErrorBox, Icon, Loading, RankBadge, RowMarks, Disclaimer, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
 import Spark from "../components/Spark";
 import { mdDate, num, pct, slashDate, yen } from "../format";
 import { flag, go, setFlag } from "../router";
@@ -57,13 +57,15 @@ export default function Home({ onGuide }: { onGuide: () => void }) {
       {error && !data && <ErrorBox message={error} onRetry={reload} />}
       {data && (
         <div className={loading ? "fade-stale" : ""}>
+          {/* 登録があれば、自分の銘柄を最初に見せる（無いうちは下に案内だけ出す） */}
+          {data.watchlist.length > 0 && <WatchCard rows={data.watchlist} />}
           <MarketCard data={data} />
           <MoversCard data={data} />
           <UpcomingCard data={data} />
           <RankingCard rows={data.ranking} universe={data.universe} />
           <SignalCard data={data} />
           <MarginCard m={data.margin} />
-          <WatchCard rows={data.watchlist} />
+          {data.watchlist.length === 0 && <WatchCard rows={data.watchlist} />}
           <Card icon="flask" title="この数字は当たる？" link="検証を見る" onLink={() => go("verify")} guide="verify-home">
             <p className="prose !text-[13px]">
               モメンタム度やシグナルが、その後に市場平均を上回ったかを毎日検証しています。
@@ -329,7 +331,7 @@ function WatchCard({ rows }: { rows: StockRow[] }) {
           <div key={r.code} className="list-row"><span className="t-3 text-[12px]">{r.code}</span><span className="t-3 text-[12px]">日足なし</span><span /><span /></div>
         ) : (
           <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr auto auto 40px" }} onClick={() => go(`stock/${r.code}`)}>
-            <span className="list-name"><b>{r.name}</b><small className="list-sub"><span>{r.code}</span><WhyNote row={r} /></small></span>
+            <span className="list-name"><b>{r.name}</b><small className="list-sub wrap"><span>{r.code}</span><RowMarks row={r} /></small></span>
             <span className="text-right text-[13px] num">{yen(r.close)}</span>
             <span className="text-right text-[12px] w-[52px]"><Delta v={r.chg1} /></span>
             <span className="text-center"><RankBadge rank={r.rank} /></span>

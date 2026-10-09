@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, ErrorBox, Icon, Loading, RankBadge, Seg } from "../components/ui";
+import { Card, ErrorBox, Icon, Loading, RankBadge, ScopeChecks, Seg } from "../components/ui";
 import { mdDate, num, shares } from "../format";
 import { back, go } from "../router";
 import type { MarginResponse, MarginRow } from "../types";
+import { watchlist } from "../watch";
 
 type Order = "low" | "high";
 
@@ -29,12 +30,16 @@ export default function Margin() {
   const [segment, setSegment] = useState("");
   const [size, setSize] = useState("1");
   const [liquidOnly, setLiquidOnly] = useState(true);
+  const [watchOnly, setWatchOnly] = useState(false);
   const [limit, setLimit] = useState(50);
 
   const low = order === "low";
   const days = (r: MarginRow) => (low ? r.m.sell_days : r.m.buy_days) ?? 0;
+  const watched = new Set(watchlist());
+  // ウォッチリストだけのときは、流動性や残高の大きさでは落とさない（自分で選んだ銘柄なので）
   const items = (data?.items ?? [])
-    .filter((r) => r.m.ratio != null && (!liquidOnly || r.liquid) && (!segment || r.segment === segment) && days(r) >= Number(size))
+    .filter((r) => r.m.ratio != null && (!segment || r.segment === segment)
+      && (watchOnly ? watched.has(r.code) : (!liquidOnly || r.liquid) && days(r) >= Number(size)))
     .sort((a, b) => (low ? a.m.ratio! - b.m.ratio! : b.m.ratio! - a.m.ratio!) || days(b) - days(a));
   const s = data?.summary;
   const reset = () => setLimit(50);
@@ -64,12 +69,10 @@ export default function Margin() {
               <div className="note mb-1 px-1">{low ? "売り残" : "買い残"}の大きさ（出来高20日平均の何日分か）</div>
               <Seg value={size} onChange={(v) => { setSize(v); reset(); }} options={SIZE} />
             </div>
-            <div className="flex items-center justify-between mt-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-3">
               <span className="note">{mdDate(data.date)} 申込み分 · 該当 {num(items.length)} 銘柄</span>
-              <label className="flex items-center gap-2 text-[13px] t-2">
-                <input type="checkbox" checked={liquidOnly} onChange={(e) => { setLiquidOnly(e.target.checked); reset(); }} />
-                流動性のある銘柄だけ
-              </label>
+              <ScopeChecks hasWatch={watched.size > 0} watchOnly={watchOnly} onWatch={(v) => { setWatchOnly(v); reset(); }}
+                liquidOnly={liquidOnly} onLiquid={(v) => { setLiquidOnly(v); reset(); }} />
             </div>
           </div>
 
@@ -80,7 +83,7 @@ export default function Margin() {
             {items.slice(0, limit).map((r) => (
               <button key={r.code} className="list-row" style={{ gridTemplateColumns: COLS }} onClick={() => go(`stock/${r.code}`)}>
                 <span className="list-name">
-                  <b>{r.name}</b>
+                  <b>{watched.has(r.code) && <span className="t-gold">★ </span>}{r.name}</b>
                   <small className="list-sub">
                     <span>{r.code} · {low ? "売り残" : "買い残"} {shares(low ? r.m.sell : r.m.buy)}</span>
                     <span className="why-text">{days(r) ? `${num(days(r), 1)}日分` : ""}</span>

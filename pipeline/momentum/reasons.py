@@ -227,7 +227,7 @@ class Extras:
 @dataclass
 class Reasons:
     labels: dict                  # (日付文字列, code) → (ラベル, 短い文言)。直近 WINDOW_DAYS 日
-    latest: pd.DataFrame          # index=code: why, why_text, idio, vr, disc, disc_text（最新日。一覧用）
+    latest: pd.DataFrame          # index=code: why, why_text, idio, vr, std_ratio, disc, disc_text（最新日。一覧用）
     detail: dict                  # code → 最新日の説明（銘柄詳細用）
     disclosures: dict             # code → 直近 LIST_DAYS 日の開示（新しい順）
     status: dict                  # 材料ごとの取得状況（設定画面・実行記録用）
@@ -571,6 +571,8 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
         "why_text": [labels.get((day, cd), (None, None))[1] for cd in codes],
         "idio": [_pct(x) for x in I[last]],
         "vr": [None if not np.isfinite(x) else round(float(x), 1) for x in VR[last]],
+        # 制度信用倍率（一覧の行に「売り長」の印を付けるため。倍率の無い銘柄は None）
+        "std_ratio": [(margin.get(cd) or {}).get("std_ratio") for cd in codes],
     }, index=codes)
 
     detail = {}

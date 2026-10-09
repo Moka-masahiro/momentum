@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, Seg, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, ScopeChecks, Seg, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
 import { num, slashDate } from "../format";
 import { back, go } from "../router";
 import type { MoversResponse, Why } from "../types";
+import { watchlist } from "../watch";
 
 const ORDER: Why[] = ["news", "supply", "unknown", "market"];
 
@@ -15,9 +16,11 @@ export default function Movers() {
   const { data, error, loading, reload } = useData<MoversResponse>(paths.movers, api.movers);
   const [why, setWhy] = useState<"" | Why>("");
   const [liquidOnly, setLiquidOnly] = useState(true);
+  const [watchOnly, setWatchOnly] = useState(false);
   const [limit, setLimit] = useState(50);
 
-  const base = (data?.items ?? []).filter((r) => !liquidOnly || r.liquid);
+  const watched = new Set(watchlist());
+  const base = (data?.items ?? []).filter((r) => (watchOnly ? watched.has(r.code) : !liquidOnly || r.liquid));
   const count = (k: Why) => base.filter((r) => r.why === k).length;
   const items = why ? base.filter((r) => r.why === why) : base;
   const st = data?.status;
@@ -37,14 +40,12 @@ export default function Movers() {
             <Seg value={why} onChange={(v) => { setWhy(v); setLimit(50); }}
               options={[{ value: "" as const, label: `すべて ${base.length}` },
                 ...ORDER.map((k) => ({ value: k, label: `${WHY_LABEL[k]} ${count(k)}` }))]} />
-            <div className="flex items-center justify-between mt-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-3">
               <span className="note flex items-center gap-1.5">
                 {slashDate(data.as_of)} の{data.session === "am" ? "前場の" : ""}値動き<SessionBadge session={data.session} />
               </span>
-              <label className="flex items-center gap-2 text-[13px] t-2">
-                <input type="checkbox" checked={liquidOnly} onChange={(e) => setLiquidOnly(e.target.checked)} />
-                流動性のある銘柄だけ
-              </label>
+              <ScopeChecks hasWatch={watched.size > 0} watchOnly={watchOnly} onWatch={(v) => { setWatchOnly(v); setLimit(50); }}
+                liquidOnly={liquidOnly} onLiquid={(v) => { setLiquidOnly(v); setLimit(50); }} />
             </div>
             <SessionNote session={data.session} className="mt-2" />
             {st && !st.disclosures.ok && (
@@ -60,7 +61,7 @@ export default function Movers() {
             {items.slice(0, limit).map((r) => (
               <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr 58px 44px" }} onClick={() => go(`stock/${r.code}`)}>
                 <span className="list-name">
-                  <b>{r.name}</b>
+                  <b>{watched.has(r.code) && <span className="t-gold">★ </span>}{r.name}</b>
                   <small className="list-sub"><span>{r.code}</span><WhyNote row={r} /></small>
                 </span>
                 <span className="text-right text-[12.5px] font-semibold"><Delta v={r.chg1} /></span>

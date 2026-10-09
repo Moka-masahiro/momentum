@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, Seg, SessionBadge } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, ScopeChecks, Seg, SessionBadge } from "../components/ui";
 import { mdTime, num, pct, slashDate } from "../format";
 import { back, go } from "../router";
 import type { DisclosureGroup, DisclosuresResponse, FeedItem } from "../types";
+import { watchlist } from "../watch";
 
 type Tab = "upcoming" | "today";
 
@@ -33,7 +34,7 @@ export default function Disclosures() {
   // どちらも、ウォッチリストの銘柄を先頭に寄せる
   const rows = (tab === "today" ? [...hits].sort((a, b) => Math.abs(head(b).idio ?? 0) - Math.abs(head(a).idio ?? 0)) : [...hits])
     .sort((a, b) => Number(b.watched) - Number(a.watched));
-  const anyWatched = !!data && [...data.upcoming, ...data.today].some((g) => g.watched);
+  const anyWatched = watchlist().length > 0;
   const reset = () => setLimit(50);
   const when = (x: FeedItem) => (x.time.startsWith(data?.as_of ?? "-") ? x.time.slice(11) : mdTime(x.time));
 
@@ -64,18 +65,8 @@ export default function Disclosures() {
                 {slashDate(data.as_of)} {tab === "upcoming" ? (am ? "11:30 以降の開示" : "引け後の開示") : (am ? "の前場" : "の値動き")}
                 <SessionBadge session={data.session} />
               </span>
-              <span className="flex items-center gap-3">
-                {anyWatched && (
-                  <label className="flex items-center gap-1.5 text-[13px] t-2">
-                    <input type="checkbox" checked={watchOnly} onChange={(e) => { setWatchOnly(e.target.checked); reset(); }} />
-                    ウォッチだけ
-                  </label>
-                )}
-                <label className="flex items-center gap-1.5 text-[13px] t-2">
-                  <input type="checkbox" checked={liquidOnly} disabled={watchOnly} onChange={(e) => { setLiquidOnly(e.target.checked); reset(); }} />
-                  流動性あり
-                </label>
-              </span>
+              <ScopeChecks hasWatch={anyWatched} watchOnly={watchOnly} onWatch={(v) => { setWatchOnly(v); reset(); }}
+                liquidOnly={liquidOnly} onLiquid={(v) => { setLiquidOnly(v); reset(); }} />
             </div>
             {!data.ok && <p className="note t-warn mt-2">開示を取得できなかった日があります。一覧に出ていない開示があるかもしれません。</p>}
           </div>

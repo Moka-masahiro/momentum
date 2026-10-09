@@ -30,7 +30,7 @@ LATEST_COLUMNS = (
     "code", "name", "segment", "sector33", "close", "chg1", "chg5", "chg20", "chg60",
     "score", "rank", "score_d1", "score_d5", "score_d20", "position", "turnover20",
     "liquid", "base", "traded_today", "last_date", "signals_today", "t",
-    "why", "why_text", "idio", "vr", "disc", "disc_text",
+    "why", "why_text", "idio", "vr", "disc", "disc_text", "std_ratio",
 )
 # 開示の一覧の列（reasons.compute の feed）。pending が next / pm のものは、まだ値動きに効いていない
 DISCLOSURE_COLUMNS = ("code", "time", "category", "kind", "title", "url", "pending", "day", "ret", "idio")
@@ -89,6 +89,7 @@ def row(code: str, r: pd.Series) -> dict:
         # これからの材料（引け後の開示など）のうち、いちばん効きそうなものの分類と短い文言
         "disc": _str(r.get("disc")),
         "disc_text": _str(r.get("disc_text")),
+        "std_ratio": _r(r.get("std_ratio"), 3),   # 制度信用倍率（1倍未満＝売り長。倍率の無い銘柄は None）
     }
 
 

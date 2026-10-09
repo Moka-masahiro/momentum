@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { deltaClass, num, pct, signed } from "../format";
-import type { Rank, Session, Why } from "../types";
+import type { Rank, Session, StockRow, Why } from "../types";
 
 /* ---------- アイコン（線画。currentColor で色を継ぐ） ---------- */
 
@@ -112,9 +112,30 @@ export function WhyNote({ row, text = true }: { row: { why?: Why | null; why_tex
 const SUPPLY_CATEGORIES = new Set(["増資・売出し", "自社株買い", "大株主の異動", "貸借銘柄"]);
 
 /** 開示の分類のラベル。株の需給に関わる開示は「需給」と同じ色にする */
-export function DiscChip({ category }: { category: string | null | undefined }) {
+export function DiscChip({ category, prefix = "" }: { category: string | null | undefined; prefix?: string }) {
   if (!category) return null;
-  return <span className={`why ${SUPPLY_CATEGORIES.has(category) ? "why-supply" : "why-news"}`}>{category}</span>;
+  return <span className={`why ${SUPPLY_CATEGORIES.has(category) ? "why-supply" : "why-news"}`}>{prefix}{category}</span>;
+}
+
+type Marked = Pick<StockRow, "why" | "disc" | "std_ratio" | "signals_today">;
+
+export function hasMarks(r: Marked): boolean {
+  return !!(r.why || r.disc || (r.std_ratio != null && r.std_ratio < 1) || r.signals_today?.length);
+}
+
+/**
+ * 一覧の行に並べる印（ウォッチリスト用）: きょうの値動きの理由・これからの材料（引け後の開示）・
+ * 制度信用の売り長・当日のシグナル。何も無い銘柄は何も出さない
+ */
+export function RowMarks({ row }: { row: Marked }) {
+  return (
+    <>
+      <WhyChip why={row.why} />
+      <DiscChip category={row.disc} prefix="開示: " />
+      {row.std_ratio != null && row.std_ratio < 1 && <span className="why why-supply">売り長 {num(row.std_ratio, 2)}倍</span>}
+      {!!row.signals_today?.length && <span className="why why-market">⚡ シグナル</span>}
+    </>
+  );
 }
 
 /* ---------- データの時点（昼の実行） ---------- */
@@ -275,6 +296,30 @@ export function Seg<T extends string>({ value, options, onChange }: { value: T; 
         </button>
       ))}
     </div>
+  );
+}
+
+/** 一覧の絞り込み: ウォッチリストだけ（登録があるときだけ出す）と、流動性のある銘柄だけ */
+export function ScopeChecks({ liquidOnly, onLiquid, watchOnly, onWatch, hasWatch }: {
+  liquidOnly: boolean;
+  onLiquid: (v: boolean) => void;
+  watchOnly: boolean;
+  onWatch: (v: boolean) => void;
+  hasWatch: boolean;
+}) {
+  return (
+    <span className="flex items-center gap-3">
+      {hasWatch && (
+        <label className="flex items-center gap-1.5 text-[13px] t-2">
+          <input type="checkbox" checked={watchOnly} onChange={(e) => onWatch(e.target.checked)} />
+          ウォッチだけ
+        </label>
+      )}
+      <label className="flex items-center gap-1.5 text-[13px] t-2">
+        <input type="checkbox" checked={liquidOnly} disabled={watchOnly} onChange={(e) => onLiquid(e.target.checked)} />
+        流動性あり
+      </label>
+    </span>
   );
 }
 

@@ -415,6 +415,9 @@ def test_standardized_margin_ratio_excludes_negotiable():
     assert (m["1000"]["std_buy_days"], m["1000"]["std_sell_days"], m["1000"]["loan"]) == (11.9, 0.9, True)
     assert (m["1001"]["ratio"], m["1001"]["std_ratio"], m["1001"]["std_ratio_prev"], m["1001"]["loan"]) == (3.55, None, None, False)
     assert (m["1002"]["std_ratio"], m["1002"]["std_ratio_prev"], m["1002"]["std_sell_chg"]) == (0.25, None, None)
+    # 一覧の行に付ける「売り長」の印のため、最新値の表にも倍率を持つ（倍率の無い銘柄は欠損）
+    latest = rsn.compute(p, base, ex, last + pd.Timedelta(hours=17)).latest
+    assert latest.at["1002", "std_ratio"] == 0.25 and pd.isna(latest.at["1001", "std_ratio"]) and pd.isna(latest.at["1005", "std_ratio"])
     # 市場全体は残高の合計どうしの比。前日は、前日比のある銘柄の「残高−前日比」の合計で出す
     rows = [[c, x["loan"], x["std_buy"], x["std_buy_chg"], x["std_sell"], x["std_sell_chg"], x["std_ratio"],
              x["std_ratio_prev"], x["std_buy_days"], x["std_sell_days"]] for c, x in m.items()]

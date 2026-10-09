@@ -1,5 +1,5 @@
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, WhyNote } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, RowMarks, hasMarks } from "../components/ui";
 import { num, yen } from "../format";
 import { back, go } from "../router";
 import type { Home } from "../types";
@@ -17,7 +17,7 @@ export default function Watchlist() {
       {loading && !data && <Loading />}
       {error && !data && <ErrorBox message={error} onRetry={reload} />}
       {data && (
-        <Card sub="この端末の中に保存しています（外には送りません）。追加・削除は銘柄詳細の ☆ から。まとめて追加は設定から">
+        <Card sub="この端末の中に保存しています（外には送りません）。追加・削除は銘柄詳細の ☆ から。まとめて追加は設定から。印は、きょうの値動きの理由・引け後の開示・制度信用の売り長・当日のシグナル">
           <div className="list-head" style={{ gridTemplateColumns: "1fr 70px 52px 52px 34px" }}>
             <span>銘柄名</span><span className="text-right">株価</span><span className="text-right">前日比</span><span className="text-right">1か月</span><span className="text-center">ランク</span>
           </div>
@@ -28,9 +28,9 @@ export default function Watchlist() {
               <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr 70px 52px 52px 34px" }} onClick={() => go(`stock/${r.code}`)}>
                 <span className="list-name">
                   <b>{r.name}</b>
-                  <small className="list-sub">
-                    {r.why ? (
-                      <><span>{r.code}</span><WhyNote row={r} /></>
+                  <small className="list-sub wrap">
+                    {hasMarks(r) ? (
+                      <><span>{r.code}</span><RowMarks row={r} /></>
                     ) : (
                       <span>{r.code} · モメンタム度 {num(r.score)}{r.position ? ` · ${num(r.position)}位` : ""}</span>
                     )}
