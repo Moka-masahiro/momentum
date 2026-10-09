@@ -262,6 +262,17 @@ button.tile:active,
   white-space: nowrap;
   color: var(--text-2);
 }
+/* 開示の表題（長いので2行まで） */
+.list-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-top: 3px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text-2);
+}
 .list-val { font-size: 18px; font-weight: 700; text-align: right; }
 
 /* --- セグメント切り替え --- */

@@ -12,6 +12,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  DisclosureGroup,
+  DisclosuresResponse,
+  FeedItem,
   Home,
   MarginResponse,
   MarginSummary,
@@ -227,6 +230,7 @@ interface LatestDoc {
 interface Latest {
   as_of: string;
   universe: number;
+  hasDisc: boolean;     // 「これからの材料」の列があるか（古いデータには無い）
   rows: StockRow[];
   byCode: Map<string, StockRow>;
   missing: StockRow[];
@@ -246,7 +250,10 @@ async function latest(): Promise<Latest> {
       const missing = doc.missing.map(
         ([code, name, segment]) => ({ code, name, segment, missing: true }) as unknown as StockRow,
       );
-      return { as_of: doc.as_of, universe: doc.universe, rows, byCode: new Map(rows.map((r) => [r.code, r])), missing };
+      return {
+        as_of: doc.as_of, universe: doc.universe, hasDisc: doc.columns.includes("disc"),
+        rows, byCode: new Map(rows.map((r) => [r.code, r])), missing,
+      };
     });
     latestCache = { built: meta.built, value };
     value.catch(() => (latestCache = null));
@@ -279,6 +286,15 @@ interface SignalsDoc {
   defs: { key: string; label: string; tone: "up" | "warn"; rule: string }[];
 }
 
+interface FeedDoc {
+  as_of: string;
+  session?: Session;
+  ok: boolean;
+  latest: string | null;
+  columns: string[];
+  rows: unknown[][];
+}
+
 interface MarginDoc {
   as_of: string;
   date: string | null;
@@ -294,12 +310,22 @@ function moverRows(l: Latest): StockRow[] {
     .sort((a, b) => Math.abs(b.idio ?? 0) - Math.abs(a.idio ?? 0));
 }
 
+/** これからの材料のある銘柄（ホーム用）。ウォッチリスト → 流動性あり → 売買代金の大きい順 */
+function upcomingRows(l: Latest): StockRow[] {
+  const w = new Set(watchlist());
+  return l.rows
+    .filter((r) => r.disc)
+    .sort((a, b) => Number(w.has(b.code)) - Number(w.has(a.code)) || Number(b.liquid) - Number(a.liquid)
+      || (b.turnover20 ?? 0) - (a.turnover20 ?? 0));
+}
+
 export const paths = {
   home: "home",
   ranking: (segment: string, minTurnover: number, limit: number) => `ranking|${segment}|${minTurnover}|${limit}`,
   stock: (code: string) => `stock|${code}`,
   signals: (date?: string) => `signals|${date ?? ""}`,
   movers: "movers",
+  disclosures: "disclosures",
   margin: "margin",
   market: "market",
   verify: "verify",
@@ -308,7 +334,10 @@ export const paths = {
 export const api = {
   async home(): Promise<Home> {
     const [h, l] = await Promise.all([load<HomeDoc>("home"), latest()]);
-    return { ...h, watchlist: watchRows(l), movers: moverRows(l).filter((r) => r.liquid) };
+    return {
+      ...h, watchlist: watchRows(l), movers: moverRows(l).filter((r) => r.liquid),
+      upcoming: l.hasDisc ? upcomingRows(l) : undefined,
+    };
   },
 
   async movers(): Promise<MoversResponse> {
@@ -346,6 +375,27 @@ export const api = {
       return { ...d, count: items.length, items, stats: s.stats[d.key] ?? null };
     });
     return { as_of: s.as_of, session: s.session ?? "close", date: target, dates: s.dates, total: today.length, groups };
+  },
+
+  /** 開示の一覧を、これからの材料と最新日に効いた開示に分け、銘柄ごとにまとめる（並びはデータの順のまま） */
+  async disclosures(): Promise<DisclosuresResponse> {
+    const [doc, l] = await Promise.all([load<FeedDoc>("disclosures"), latest()]);
+    const watched = new Set(watchlist());
+    const tabs = { upcoming: new Map<string, DisclosureGroup>(), today: new Map<string, DisclosureGroup>() };
+    for (const a of doc.rows) {
+      const o: Record<string, unknown> = {};
+      doc.columns.forEach((c, i) => (o[c] = a[i]));
+      const stock = l.byCode.get(o.code as string);
+      if (!stock) continue;
+      const m = tabs[o.day == null ? "upcoming" : "today"];
+      let g = m.get(stock.code);
+      if (!g) m.set(stock.code, (g = { stock, items: [], watched: watched.has(stock.code) }));
+      g.items.push(o as unknown as FeedItem);
+    }
+    return {
+      as_of: doc.as_of, session: doc.session ?? "close", ok: doc.ok, latest: doc.latest,
+      upcoming: [...tabs.upcoming.values()], today: [...tabs.today.values()],
+    };
   },
 
   /** 制度信用の残高のある銘柄（並べ替えと絞り込みは画面側）。銘柄名やランクは最新値から足す */

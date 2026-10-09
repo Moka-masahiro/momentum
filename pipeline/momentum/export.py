@@ -9,6 +9,7 @@
     signals   直近20営業日のシグナル（その日の値動きの理由付き）と、種別ごとの過去の実績
     verify    検証（IC・ランク別・十分位・シグナル実績・分割補正の記録）
     margin    制度信用倍率（制度信用の買い残÷売り残）の一覧と、全銘柄の合計
+    disclosures  開示の一覧（定例を除く）: これからの材料と、最新日に効いた開示
     stocks/<code>  1銘柄の詳細（チャート・指標・5角形・シグナル履歴・テクニカル整理・
                    値動きの理由・直近30日の開示）
 """
@@ -29,8 +30,10 @@ LATEST_COLUMNS = (
     "code", "name", "segment", "sector33", "close", "chg1", "chg5", "chg20", "chg60",
     "score", "rank", "score_d1", "score_d5", "score_d20", "position", "turnover20",
     "liquid", "base", "traded_today", "last_date", "signals_today", "t",
-    "why", "why_text", "idio", "vr",
+    "why", "why_text", "idio", "vr", "disc", "disc_text",
 )
+# 開示の一覧の列（reasons.compute の feed）。pending が next / pm のものは、まだ値動きに効いていない
+DISCLOSURE_COLUMNS = ("code", "time", "category", "kind", "title", "url", "pending", "day", "ret", "idio")
 # 制度信用倍率の一覧の列（残高は制度信用の分だけ。reasons._std_margin）
 MARGIN_COLUMNS = ("code", "loan", "buy", "buy_chg", "sell", "sell_chg", "ratio", "ratio_prev",
                   "buy_days", "sell_days")
@@ -83,6 +86,9 @@ def row(code: str, r: pd.Series) -> dict:
         "why_text": _str(r.get("why_text")),
         "idio": _r(r.get("idio"), 2),     # 業種の中央値との差（%）
         "vr": _r(r.get("vr"), 1),         # 出来高 ÷ 直前20日平均
+        # これからの材料（引け後の開示など）のうち、いちばん効きそうなものの分類と短い文言
+        "disc": _str(r.get("disc")),
+        "disc_text": _str(r.get("disc_text")),
     }
 
 
@@ -97,6 +103,7 @@ def documents(st: State) -> Iterator[tuple[str, dict]]:
     yield "latest", _latest(st, rows)
     yield "market", {"as_of": st.as_of, **market}
     yield "margin", margin
+    yield "disclosures", _disclosures(st)
     yield "signals", _signals(st)
     yield "verify", {"as_of": st.as_of, "computed_at": built_at, "signal_stats": st.stats,
                      "signal_defs": signal_defs(), "adjustments": st.panel.adjustments, **st.validation}
@@ -200,6 +207,34 @@ def _margin(st: State) -> dict:
         "summary": margin_summary(rows),
         "columns": list(MARGIN_COLUMNS),
         "rows": rows,
+    })
+
+
+def _disclosures(st: State) -> dict:
+    """開示の一覧（定例を除く）。前半が「これからの材料」（day が無い。引け後の開示＝次の取引日、
+    昼の実行では 11:30 以降＝後場）、後半が「最新日に効いた開示」（その日の騰落率と業種との差つき）。
+
+    銘柄は売買代金（20日平均）の大きい順に並べる。最初は分類の優先順にしていたが、小さな会社の
+    子会社異動が大型株の業績修正より前に来た（2026-10-08: カヤバの子会社異動がテルモの業績修正より上）。
+    同じ銘柄の開示は続けて置き、その中は判定に効く順（先頭が見出し）。
+    """
+    rs = st.reasons
+    turnover = st.latest["turnover20"].fillna(0.0).to_dict()
+    parts = []
+    for upcoming in (True, False):
+        by_code: dict = {}
+        for x in (rs.feed if rs else []):
+            if (x["day"] is None) == upcoming:
+                by_code.setdefault(x["code"], []).append(x)
+        for code in sorted(by_code, key=lambda c: (-turnover.get(c, 0.0), c)):
+            parts += by_code[code]
+    return _finite({
+        "as_of": st.as_of,
+        "session": st.session,
+        "ok": bool(rs and rs.status["disclosures"]["ok"]),
+        "latest": rs.status["disclosures"]["latest"] if rs else None,   # 取得できた最も新しい開示の時刻
+        "columns": list(DISCLOSURE_COLUMNS),
+        "rows": [[x.get(c) for c in DISCLOSURE_COLUMNS] for x in parts],
     })
 
 

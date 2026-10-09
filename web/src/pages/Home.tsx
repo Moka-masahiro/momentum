@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, Disclaimer, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
+import { Card, Delta, DiscChip, ErrorBox, Icon, Loading, RankBadge, Disclaimer, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
 import Spark from "../components/Spark";
 import { mdDate, num, pct, slashDate, yen } from "../format";
 import { flag, go, setFlag } from "../router";
@@ -59,6 +59,7 @@ export default function Home({ onGuide }: { onGuide: () => void }) {
         <div className={loading ? "fade-stale" : ""}>
           <MarketCard data={data} />
           <MoversCard data={data} />
+          <UpcomingCard data={data} />
           <RankingCard rows={data.ranking} universe={data.universe} />
           <SignalCard data={data} />
           <MarginCard m={data.margin} />
@@ -199,6 +200,40 @@ function MoversCard({ data }: { data: HomeData }) {
           <p className="note mt-2">ニュースは会社の適時開示だけで、新聞報道は含みません。材料不明は、開示も需給の手がかりも無かったものです。</p>
         </>
       )}
+    </Card>
+  );
+}
+
+function UpcomingCard({ data }: { data: HomeData }) {
+  const rows = data.upcoming;
+  if (rows === undefined) return null; // これからの材料の無い古いデータ
+  const am = data.session === "am";
+  const liquid = rows.filter((r) => r.liquid);
+  const counts = new Map<string, number>();
+  for (const r of liquid) counts.set(r.disc!, (counts.get(r.disc!) ?? 0) + 1);
+  const ok = data.reasons?.disclosures.ok;
+  return (
+    <Card icon="doc" title={am ? "後場の材料" : "次の取引日の材料"} link="一覧を見る" onLink={() => go("disclosures")} guide="disclosures-home"
+      sub={`${am ? "前場の引け（11:30）" : "大引け（15:30）"}より後に出た会社の開示（定例を除く）。まだ株価には反映されていません`}>
+      {ok === false && <p className="note t-warn mb-2">開示を取得できなかった日があります。</p>}
+      <div className="flex flex-wrap gap-1.5">
+        {[...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([c, n]) => (
+          <button key={c} className="why why-unknown !text-[12px] !py-1.5 !px-2" onClick={() => go("disclosures")}>{c} {n}</button>
+        ))}
+      </div>
+      <div className="mt-2">
+        {rows.slice(0, 5).map((r) => (
+          <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr 40px" }} onClick={() => go(`stock/${r.code}`)}>
+            <span className="list-name">
+              <b>{r.name}</b>
+              <small className="list-sub"><DiscChip category={r.disc} /><span className="why-text">{r.disc_text}</span></small>
+            </span>
+            <span className="text-center"><RankBadge rank={r.rank} /></span>
+          </button>
+        ))}
+        {rows.length === 0 && <p className="note mt-1">{am ? "前場の引けより後" : "引け後"}の開示は、まだありません。</p>}
+      </div>
+      {rows.length > 0 && <p className="note mt-2">流動性のある {num(liquid.length)} 銘柄（全体では {num(rows.length)} 銘柄）。ウォッチリストの銘柄を先に、次に売買代金の大きい順。</p>}
     </Card>
   );
 }

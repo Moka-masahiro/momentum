@@ -4,6 +4,7 @@ import { GuideMenu, GuideRunner, type Tour } from "./components/Guide";
 import Lock from "./components/Lock";
 import SearchSheet from "./components/SearchSheet";
 import { Icon, Sheet } from "./components/ui";
+import Disclosures from "./pages/Disclosures";
 import Home from "./pages/Home";
 import Margin from "./pages/Margin";
 import Market from "./pages/Market";
@@ -97,6 +98,9 @@ function Main() {
       break;
     case "margin":
       view = <Margin />;
+      break;
+    case "disclosures":
+      view = <Disclosures />;
       break;
     case "verify":
       view = <Verify />;

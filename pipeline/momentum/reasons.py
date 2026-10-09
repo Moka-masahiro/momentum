@@ -100,6 +100,10 @@ _RULES = [
     (r"公開買付|TOB|MBO|マネジメント・バイアウト", "TOB・M&A", "news", "TOB(公開買付け)"),
     (r"^(?!.*(拡大|決定|追加|実施)).*自己株式.*(取得状況|取得結果|買付結果|取得終了|消却)", "定例", "routine", None),
     (r"自己株式.*(取得|買付)|自社株買", "自社株買い", "supply", "自社株買い"),
+    # 役員・従業員への報酬としての株の交付。「自己株式の処分」「株式取得」「新株予約権の行使」の言葉を含むので、
+    # 後ろの増資・M&A の規則より先に定例にする（2026-09〜10 の実測で157件。うち141件が増資・売出しになっていた）
+    # 「持株会社」（再編のニュース）は含めない: 共同持株会社の設立まで定例になった
+    (r"株式報酬|譲渡制限付|ストック・?オプション|持株会(?!社)|株式給付|株式交付信託|ESOP|BIP信託", "定例", "routine", None),
     (r"自己株式.*処分", "増資・売出し", "supply", "自己株式の処分"),
     (r"株式交換|株式移転|合併|会社分割|吸収分割|事業譲渡|事業譲受|事業の譲|子会社化|子会社の異動|"
      r"株式の取得|株式取得|持分法|資本業務提携|資本提携|親会社の異動|その他の関係会社の異動|株式併合",
@@ -131,10 +135,14 @@ _RULES = [
     (r"月次|月度|売上速報|営業概況|営業状況|販売実績|受注状況", "月次", "news", "月次の業績"),
     (r"受注|契約|提携|採択|承認|認可|特許|共同開発|共同研究|新製品|新サービス|発売|提供開始|出店|"
      r"治験|臨床試験|協定|合意", "受注・提携等", "news", None),
+    # 信用取引で売れる銘柄になる（外れる）知らせ。会社の業績ではなく需給の話
+    (r"貸借銘柄|制度信用銘柄", "貸借銘柄", "supply", "貸借銘柄の選定・解除"),
     (r"コーポレート・ガバナンス|独立役員|招集|定款|株主総会|支配株主等に関する事項|親会社等の決算|内部統制|"
      r"有価証券報告書|半期報告書|報告書の提出|英文|資本コスト|サステナビリティ|統合報告|ESG|健康経営|"
      r"成長可能性に関する|投資家の皆さま|説明会|ストック・オプション|ストックオプション|株式報酬|"
-     r"譲渡制限付株式|資本準備金|役員の異動|執行役員|人事異動|組織変更|機構改革|本店|商号|基準日|行使状況",
+     r"譲渡制限付株式|資本準備金|役員の異動|執行役員|人事異動|組織変更|機構改革|本店|商号|基準日|行使状況|"
+     # 一覧にして分かった定例（2026-09〜10 の「その他」588件のうち約100件）: 説明会の質疑・FAQ、委員会、役員人事
+     r"質疑応答|ご質問|FAQ|Q&A|委員会.*(委員|設置|移行)|役員人事|取締役候補|監査役の|補欠監査役|役員退職慰労金|会社説明資料",
      "定例", "routine", None),
 ]
 _COMPILED = [(re.compile(p), cat, kind, text) for p, cat, kind, text in _RULES]
@@ -142,7 +150,7 @@ _COMPILED = [(re.compile(p), cat, kind, text) for p, cat, kind, text in _RULES]
 # 同じ窓に複数の開示があるとき、一覧に出す見出しをどれにするか（前ほど優先）
 _PRIORITY = ["TOB・M&A", "業績修正", "決算", "報道への回答", "上場維持・会計", "訴訟・事故等", "配当",
              "受注・提携等", "株式分割", "株主優待", "上場市場の変更", "代表の交代", "月次", "その他",
-             "増資・売出し", "自社株買い", "大株主の異動"]
+             "増資・売出し", "自社株買い", "大株主の異動", "貸借銘柄"]
 
 
 def classify(title: str) -> tuple[str, str, str]:
@@ -219,10 +227,11 @@ class Extras:
 @dataclass
 class Reasons:
     labels: dict                  # (日付文字列, code) → (ラベル, 短い文言)。直近 WINDOW_DAYS 日
-    latest: pd.DataFrame          # index=code: why, why_text, idio, vr（最新日。一覧用）
+    latest: pd.DataFrame          # index=code: why, why_text, idio, vr, disc, disc_text（最新日。一覧用）
     detail: dict                  # code → 最新日の説明（銘柄詳細用）
     disclosures: dict             # code → 直近 LIST_DAYS 日の開示（新しい順）
     status: dict                  # 材料ごとの取得状況（設定画面・実行記録用）
+    feed: list = field(default_factory=list)   # 開示の一覧（これからの材料と、最新日に効いた開示。定例は除く）
 
     def label(self, day: str, code: str) -> tuple[str | None, str | None]:
         return self.labels.get((day, code), (None, None))
@@ -605,6 +614,23 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
         if out:
             lists[code] = out
 
+    # --- 開示の一覧（定例を除く）: これからの材料（引け後＝次の取引日、昼の実行なら 11:30 以降＝後場）と、
+    #     最新日に効いた開示（その日の値動き付き）。銘柄ごとに、判定に効く順で並べる ---
+    feed = []
+    if len(disc):
+        live = disc[(disc["kind"] != "routine") & (disc["day"].isna() | (disc["day"] == dates[last]))]
+        for x in sorted(live.itertuples(), key=lambda r: (r.code, _importance(r))):
+            item = {"code": x.code, **_item(x), "text": x.text}
+            if item["day"]:
+                item["ret"], item["idio"] = _pct(R[last, col[x.code]]), _pct(I[last, col[x.code]])
+            feed.append(item)
+    ahead: dict = {}
+    for item in feed:               # 一覧の行に付ける印は、これからの材料の先頭（いちばん効きそうなもの）
+        if item["day"] is None:
+            ahead.setdefault(item["code"], item)
+    latest["disc"] = [ahead[cd]["category"] if cd in ahead else None for cd in codes]
+    latest["disc_text"] = [ahead[cd]["text"] if cd in ahead else None for cd in codes]
+
     counts = pd.Series([v[0] for (d, _), v in labels.items() if d == day]).value_counts().to_dict()
     status = {
         "date": day,
@@ -626,7 +652,7 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
         "counts": {k: int(counts.get(k, 0)) for k in LABELS},
         "unchecked": int(unchecked),
     }
-    return Reasons(labels, latest, detail, lists, status)
+    return Reasons(labels, latest, detail, lists, status, feed)
 
 
 def _item(x) -> dict:

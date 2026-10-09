@@ -169,6 +169,20 @@ def test_classify_disclosure_titles():
             ("TOB・M&A", "news", "TOB(公開買付け)"),
         "コーポレート・ガバナンスに関する報告書": ("定例", "routine", "コーポレート・ガバナンスに関する報告書"),
         "役員に対する業績連動型株式報酬制度の導入に関するお知らせ": ("定例", "routine", "役員に対する業績連動型株式報酬制度の導入"),
+        # 報酬としての株の交付は定例（最初は「自己株式の処分」「株式取得」の言葉で増資・M&A になっていた）
+        "譲渡制限付株式報酬としての自己株式の処分に関するお知らせ": ("定例", "routine", "譲渡制限付株式報酬としての自己株式の処分"),
+        "株式報酬制度における株式取得に係る事項の決定に関するお知らせ":
+            ("定例", "routine", "株式報酬制度における株式取得に係る事項の決定"),
+        "従業員持株会設立に関するお知らせ": ("定例", "routine", "従業員持株会設立"),
+        # 「持株会社」は再編のニュース。報酬の「持株会」と取り違えない
+        "株式会社Ａと株式会社Ｂの共同持株会社設立（共同株式移転）に関する株式移転計画書作成について":
+            ("TOB・M&A", "news", "株式会社Ａと株式会社Ｂの共同持株会社設立（共同株式移転）に関する株式移転計画書作成"),
+        "第三者割当による自己株式の処分に関するお知らせ": ("増資・売出し", "supply", "自己株式の処分"),
+        # 開示の一覧にして分かったもの: 貸借銘柄の選定は需給の話、説明会の質疑や役員人事は定例
+        "当社株式の貸借銘柄選定に関するお知らせ": ("貸借銘柄", "supply", "貸借銘柄の選定・解除"),
+        "2026年12月期 第2四半期（中間期）決算 質疑応答集": ("定例", "routine", "第2四半期（中間期）決算 質疑応答集"),
+        "監査役の辞任及び補欠監査役の監査役就任に関するお知らせ": ("定例", "routine", "監査役の辞任及び補欠監査役の監査役就任"),
+        "代表取締役の異動に関するお知らせ": ("代表の交代", "news", "社長・代表の交代"),
     }
     for title, want in cases.items():
         assert rsn.classify(title) == want, (title, rsn.classify(title))
@@ -464,6 +478,32 @@ def test_morning_session_uses_morning_volume_and_cutoff():
     assert am.latest.at["1001", "why"] == "unknown"          # 前場の理由にはしない
     # 11:40 の開示は「後場の材料」、引け後（16:00）の開示は「次の取引日の材料」
     assert {x["pending"] for x in am.disclosures["1001"] if x["day"] is None} == {"pm", "next"}
+    # 開示の一覧でも、昼の実行では 11:40 の開示は「これからの材料」（大引け後なら当日に効いた開示）
+    assert ("1001", "業績修正", "pm") in [(x["code"], x["category"], x["pending"]) for x in am.feed if x["day"] is None]
+    assert [x["category"] for x in close.feed if x["code"] == "1001" and x["day"] is not None] == ["業績修正"]
+    assert am.latest.at["1001", "disc"] == "業績修正" and close.latest.at["1001", "disc"] == "決算"
+
+
+def test_disclosure_feed_lists_upcoming_and_todays_items():
+    # 開示の一覧: 引け後の開示（次の取引日の材料）と、最新日に効いた開示（その日の値動き付き）。定例は出さない
+    p, base, disc, days, last = _reason_panel()
+    extra = pd.DataFrame([
+        {"time": last + pd.Timedelta(hours=16, minutes=5), "code": "1001",
+         "title": "通期業績予想の上方修正に関するお知らせ", "url": None},
+        {"time": last + pd.Timedelta(hours=16, minutes=10), "code": "1003",
+         "title": "定款の一部変更に関するお知らせ", "url": None},
+    ])
+    ex = rsn.Extras(disclosures=pd.concat([disc, extra], ignore_index=True), disclosure_days=days)
+    rs = rsn.compute(p, base, ex, last + pd.Timedelta(hours=17))
+    upcoming = [(x["code"], x["category"], x["pending"]) for x in rs.feed if x["day"] is None]
+    assert upcoming == [("1001", "業績修正", "next"), ("1001", "決算", "next")]     # 銘柄の中は、効きそうな順
+    today = {x["code"]: x for x in rs.feed if x["day"] is not None}
+    assert set(today) == {"1000", "1002"}                    # 前日の引け後（1000）と当日の場中（1002）の開示
+    assert today["1000"]["ret"] > 15 and today["1000"]["idio"] > 10 and today["1002"]["kind"] == "supply"
+    assert all("ret" not in x for x in rs.feed if x["day"] is None)                # まだ値動きに効いていない
+    # 一覧の行に付ける印は、これからの材料の先頭だけ（当日に効いた開示は「値動きの理由」の側に出ている）
+    assert (rs.latest.at["1001", "disc"], rs.latest.at["1001", "disc_text"]) == ("業績修正", "業績予想の上方修正")
+    assert pd.isna(rs.latest.at["1000", "disc"]) and pd.isna(rs.latest.at["1003", "disc"])
 
 
 def test_short_clue_uses_only_recent_reports():

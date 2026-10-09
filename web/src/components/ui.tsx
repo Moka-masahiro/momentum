@@ -45,6 +45,8 @@ export function Icon({ name, size = 20 }: { name: string; size?: number }) {
       return <svg {...s}><path {...P} d="M9 3h6M10 3v6l-5.5 9.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3" /><path {...P} d="M7.5 15h9" /></svg>;
     case "pulse":
       return <svg {...s}><path {...P} d="M3 12h4l2.5-6 5 12 2.5-6h4" /></svg>;
+    case "doc":
+      return <svg {...s}><path {...P} d="M7 3h7l4 4v14H7zM14 3v4h4M10 12h5M10 16h5" /></svg>;
     case "scale":
       return <svg {...s}><path {...P} d="M12 4v16M7.5 20h9M5 7h14M5 7l-2.5 6a2.6 2.6 0 0 0 5 0zM19 7l-2.5 6a2.6 2.6 0 0 0 5 0z" /></svg>;
     default:
@@ -103,6 +105,16 @@ export function WhyNote({ row, text = true }: { row: { why?: Why | null; why_tex
       {text && row.why_text && <span className="why-text">{row.why_text}</span>}
     </>
   );
+}
+
+/* ---------- これからの材料（引け後の開示など） ---------- */
+
+const SUPPLY_CATEGORIES = new Set(["増資・売出し", "自社株買い", "大株主の異動", "貸借銘柄"]);
+
+/** 開示の分類のラベル。株の需給に関わる開示は「需給」と同じ色にする */
+export function DiscChip({ category }: { category: string | null | undefined }) {
+  if (!category) return null;
+  return <span className={`why ${SUPPLY_CATEGORIES.has(category) ? "why-supply" : "why-news"}`}>{category}</span>;
 }
 
 /* ---------- データの時点（昼の実行） ---------- */

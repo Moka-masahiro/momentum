@@ -42,6 +42,8 @@ export interface StockRow {
   why_text?: string | null; // 短い文言（開示の要約・手がかり）
   idio?: number | null;     // 業種の中央値との差（%）
   vr?: number | null;       // 出来高 ÷ 直前20日平均
+  disc?: string | null;       // これからの材料（引け後の開示など）の分類。無ければ null
+  disc_text?: string | null;  // その短い文言
 }
 
 export interface Disclosure {
@@ -135,6 +137,35 @@ export interface MarginResponse {
   items: MarginRow[];
 }
 
+/** 開示の一覧の1件（pipeline/momentum/export.py の DISCLOSURE_COLUMNS） */
+export interface FeedItem {
+  time: string;                     // "2026-10-08 15:30"
+  category: string;
+  kind: "news" | "supply";
+  title: string;
+  url: string | null;
+  pending: "next" | "pm" | null;    // まだ値動きに効いていない（next = 次の取引日 / pm = 後場）
+  day: string | null;               // 効いた取引日（これからの材料は null）
+  ret: number | null;               // その日の騰落率（%）
+  idio: number | null;              // その日の業種の中央値との差（%）
+}
+
+/** 銘柄ごとにまとめた開示（先頭がいちばん効きそうなもの） */
+export interface DisclosureGroup {
+  stock: StockRow;
+  items: FeedItem[];
+  watched: boolean;
+}
+
+export interface DisclosuresResponse {
+  as_of: string;
+  session: Session;
+  ok: boolean;                      // 開示を取得できたか
+  latest: string | null;            // 取得できた最も新しい開示の時刻
+  upcoming: DisclosureGroup[];      // これからの材料（引け後の開示＝次の取引日、昼の更新では後場）
+  today: DisclosureGroup[];         // 最新日に効いた開示（その日の値動き付き）
+}
+
 export interface SourceStatus {
   ok: boolean;
   date: string | null;
@@ -218,6 +249,7 @@ export interface Home {
   margin?: (MarginSummary & { date: string | null }) | null;   // 全銘柄を合計した制度信用倍率（古いデータには無い）
   watchlist: StockRow[];
   movers: StockRow[];               // 流動性のある銘柄のうち、理由の付いたもの（画面側で作る）
+  upcoming?: StockRow[];            // これからの材料のある銘柄（画面側で作る。古いデータでは undefined）
 }
 
 export interface RankingResponse {
