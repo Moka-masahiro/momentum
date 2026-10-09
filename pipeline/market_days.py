@@ -62,6 +62,27 @@ def previous_trading_day(d: date) -> date:
     return d
 
 
+def next_trading_day(d: date) -> date:
+    """d より後の、直近の取引日。"""
+    d += timedelta(days=1)
+    while not is_trading_day(d):
+        d += timedelta(days=1)
+    return d
+
+
+def premium_days(trade: date) -> int:
+    """その約定日の逆日歩（品貸料）が何日分か。
+
+    受渡しは2取引日後。その日の受渡しから、次の取引日の約定分の受渡しまでの暦日数になる。ふだんは1日、
+    水曜の約定は週末をまたいで3日、連休の前はもっと長い（2026-10-07 は祝日をまたいで4日）。
+    JPX の品貸料のファイルは「1日1株あたり」と注記しているが、載っている額はこの日数分の合計だった
+    （両日に逆日歩のあった348銘柄のうち297銘柄で、10/7 の額が 10/8 のちょうど4倍）。
+    """
+    def settle(d: date) -> date:
+        return next_trading_day(next_trading_day(d))
+    return (settle(next_trading_day(trade)) - settle(trade)).days
+
+
 def next_update(now: datetime) -> datetime:
     """いま作ったデータの次に、データが公開される予定の時刻（取引日の 12:05 と 17:30）。
 

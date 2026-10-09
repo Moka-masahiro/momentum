@@ -36,7 +36,7 @@ LATEST_COLUMNS = (
 DISCLOSURE_COLUMNS = ("code", "time", "category", "kind", "title", "url", "pending", "day", "ret", "idio")
 # 制度信用倍率の一覧の列（残高は制度信用の分だけ。reasons._std_margin）
 MARGIN_COLUMNS = ("code", "loan", "buy", "buy_chg", "sell", "sell_chg", "ratio", "ratio_prev",
-                  "buy_days", "sell_days")
+                  "buy_days", "sell_days", "premium", "premium_max")
 
 
 def _r(x, nd: int = 1):
@@ -200,8 +200,10 @@ def _margin(st: State) -> dict:
     for code, d in (rs.detail.items() if rs else ()):
         m = d.get("margin")
         if m and "std_buy" in m:
+            pr = d.get("premium") or {}     # 逆日歩（1日あたりの円と、その上限の最高料率。付いていなければ None）
             rows.append([code, m["loan"], m["std_buy"], m["std_buy_chg"], m["std_sell"], m["std_sell_chg"],
-                         m["std_ratio"], m["std_ratio_prev"], m["std_buy_days"], m["std_sell_days"]])
+                         m["std_ratio"], m["std_ratio_prev"], m["std_buy_days"], m["std_sell_days"],
+                         pr.get("daily"), pr.get("max")])
     return _finite({
         "as_of": st.as_of,
         "date": rs.status["margin"]["date"] if rs else None,

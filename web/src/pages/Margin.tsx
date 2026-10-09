@@ -17,6 +17,15 @@ const SIZE = [
 ];
 
 const oku = (v: number) => `${num(v / 1e8, 1)}億株`;
+
+/** 逆日歩（1日あたり）。上限（最高料率）の半分以上なら、株の調達が逼迫しているので目立たせる */
+function Premium({ m }: { m: MarginRow["m"] }) {
+  if (m.premium == null) return null;
+  const share = m.premium_max ? (m.premium / m.premium_max) * 100 : 0;
+  return share >= 50
+    ? <span className="why why-supply">逆日歩 {num(m.premium, 2)}円/日（上限の{num(share)}%）</span>
+    : <span>逆日歩 {num(m.premium, 2)}円/日</span>;
+}
 /** 倍率。売り残がわずかだと数百倍になるので、大きいほど小数を減らす */
 const times = (v: number | null) => num(v, v == null || v < 10 ? 2 : v < 100 ? 1 : 0);
 
@@ -84,9 +93,10 @@ export default function Margin() {
               <button key={r.code} className="list-row" style={{ gridTemplateColumns: COLS }} onClick={() => go(`stock/${r.code}`)}>
                 <span className="list-name">
                   <b>{watched.has(r.code) && <span className="t-gold">★ </span>}{r.name}</b>
-                  <small className="list-sub">
+                  <small className="list-sub wrap">
                     <span>{r.code} · {low ? "売り残" : "買い残"} {shares(low ? r.m.sell : r.m.buy)}</span>
                     <span className="why-text">{days(r) ? `${num(days(r), 1)}日分` : ""}</span>
+                    <Premium m={r.m} />
                   </small>
                 </span>
                 <span className="text-right leading-tight">
@@ -125,6 +135,7 @@ export default function Margin() {
               <li>・<b>制度信用倍率 ＝ 制度信用の買い残 ÷ 売り残。</b>1倍未満は売り残の方が多い「売り長」、大きいほど買い残に偏った「買い長」です。</li>
               <li>・売り残はいずれ買い戻される株、買い残はいずれ売られる株です（制度信用は6か月以内に決済）。売り長の銘柄は上がると買い戻しが重なりやすく、買い長の銘柄は上値で売りが出やすい、と言われます。</li>
               <li>・「◯日分」は、その残高が直前20日平均の出来高の何日分に当たるかです。倍率が極端でも、残高が小さければ値動きへの影響は小さくなります。</li>
+              <li>・「逆日歩」は、売り残が多くて貸す株が足りないときに、売っている側が払う品貸料です（1株・1日あたり）。売り長の銘柄にはたいてい最低水準の額が付きます。上限（最高料率）の半分以上になったら色を付けて、上限の何%かを出します。</li>
               <li>・一般信用（証券会社ごとの無期限・1日信用など）は入れていません。銘柄詳細に出している合計の信用倍率とは別の数字です。</li>
               <li>・倍率を出せるのは、制度信用の売り残がある銘柄だけです。貸借銘柄でない銘柄は制度信用では売れないので、倍率がありません。</li>
               <li>・ランクはモメンタム度のランクです（倍率とは別の指標）。</li>

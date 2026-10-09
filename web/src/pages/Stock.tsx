@@ -217,7 +217,15 @@ function ReasonCard({ d }: { d: StockDetail }) {
             </td>
           </tr>
           {r.margin && <MarginRows m={r.margin} />}
-          <tr><td>逆日歩</td><td>{r.premium ? `${num(r.premium.rate, 2)}円` : "なし"}</td></tr>
+          <tr>
+            <td>逆日歩</td>
+            <td style={{ whiteSpace: "normal" }}>
+              {!r.premium ? "なし"
+                : r.premium.days && r.premium.days > 1 && r.premium.daily != null
+                  ? `${num(r.premium.rate, 2)}円（${r.premium.days}日分。1日あたり ${num(r.premium.daily, 2)}円）`
+                  : `${num(r.premium.rate, 2)}円`}
+            </td>
+          </tr>
           <tr><td>信用取引の規制など</td><td style={{ whiteSpace: "normal" }}>{r.flags.length ? r.flags.join("・") : "なし"}</td></tr>
         </tbody>
       </table>
@@ -227,7 +235,7 @@ function ReasonCard({ d }: { d: StockDetail }) {
         機関の空売り残高は、発行済株式の0.5%以上を空売りしている機関の報告分{r.short ? `（${mdDate(r.short.date)} 計算分まで）` : ""}。
         {r.margin && `信用残は ${mdDate(r.margin.date)} 申込み時点（JPX・毎日16時公表）で、日数は直前20日平均の出来高の何日分か。`}
         {r.margin?.std_buy != null && "制度信用倍率は、一般信用（証券会社ごとの無期限・1日信用など）を除いた制度信用だけの買い残÷売り残。"}
-        逆日歩は権利取りの時期に優待目当てでも付くため、判定には使わず表示だけにしています。
+        逆日歩は権利取りの時期に優待目当てでも付くため、判定には使わず表示だけにしています（週末や祝日をまたぐ日は、その日数分の額になります）。
       </p>
       <DisclosureList items={d.disclosures ?? []} />
     </Card>

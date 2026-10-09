@@ -23,6 +23,8 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+import market_days
+
 logger = logging.getLogger(__name__)
 
 # 銘柄一覧のファイルは置き場所や形式が変わることがある（2026-09 に .xls → .xlsx に変わり、
@@ -386,7 +388,7 @@ def parse_margin_flags(raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_premium(timeout: int = 60) -> pd.DataFrame:
-    """品貸料（逆日歩）。列: code, date, rate（1株1日あたりの円）, max_rate"""
+    """品貸料（逆日歩）。列: code, date（約定日）, rate（1株あたりの円。days 日分の合計）, max_rate, days"""
     links = _jpx_find(PREMIUM_FILE, timeout)
     if not links:
         raise RuntimeError("品貸料のファイルが見つかりません")
@@ -523,6 +525,8 @@ def parse_premium(raw: pd.DataFrame) -> pd.DataFrame:
         "rate": pd.to_numeric(body["rate"], errors="coerce"),        # "*****" は貸株超過なし
         "max_rate": pd.to_numeric(body["max_rate"], errors="coerce"),
     })
+    # ファイルは「1日1株あたり」と注記しているが、載っている額は受渡しの間隔の日数分（market_days.premium_days）
+    out["days"] = [None if pd.isna(d) else market_days.premium_days(d.date()) for d in out["date"]]
     return out.dropna(subset=["code"]).reset_index(drop=True)
 
 

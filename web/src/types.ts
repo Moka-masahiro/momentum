@@ -76,7 +76,8 @@ export interface Reason {
   disclosures: Disclosure[];                // 判定の窓（前の取引日の引け後〜当日の引け）の開示
   clues: { key: string; text: string }[];   // 需給の手がかり
   short: { now: number; prev: number; change: number; holders: number; date: string } | null;
-  premium: { rate: number; max: number | null; date: string | null } | null;
+  // 逆日歩。rate は約定日 date の分の合計（days 日分）、daily は1日あたり、max は最高料率（古いデータには days・daily が無い）
+  premium: { rate: number; max: number | null; date: string | null; days?: number | null; daily?: number | null } | null;
   flags: string[];
   margin?: Margin | null;   // 全銘柄の信用残（JPX。2026-09-28 から毎日。古いデータには無い）
 }
@@ -116,6 +117,8 @@ export interface StdMargin {
   ratio_prev: number | null;
   buy_days: number | null;
   sell_days: number | null;
+  premium?: number | null;      // 逆日歩（1株・1日あたりの円。付いていなければ null）
+  premium_max?: number | null;  // その上限（最高料率）
 }
 
 /** 全銘柄を合計した制度信用倍率（残高の合計どうしの比。ETF・REIT は対象外）と、売り長の銘柄数 */

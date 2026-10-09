@@ -421,7 +421,7 @@ def test_standardized_margin_ratio_excludes_negotiable():
     assert latest.at["1002", "std_ratio"] == 0.25 and pd.isna(latest.at["1001", "std_ratio"]) and pd.isna(latest.at["1005", "std_ratio"])
     # 市場全体は残高の合計どうしの比。前日は、前日比のある銘柄の「残高−前日比」の合計で出す
     rows = [[c, x["loan"], x["std_buy"], x["std_buy_chg"], x["std_sell"], x["std_sell_chg"], x["std_ratio"],
-             x["std_ratio_prev"], x["std_buy_days"], x["std_sell_days"]] for c, x in m.items()]
+             x["std_ratio_prev"], x["std_buy_days"], x["std_sell_days"], None, None] for c, x in m.items()]
     s = export.margin_summary(rows)
     assert (s["stocks"], s["rated"], s["short"]) == (3, 2, 1)
     assert (s["buy"], s["sell"], s["ratio"]) == (123300, 9700, 12.71)
@@ -511,6 +511,21 @@ def test_stale_close_data_is_not_published():
     assert build.stale_reason(at(11, 55), thu, 0.99) is None                # 昼は対象外（前場の検査は別にある）
     assert build.stale_reason(at(17, 20, date(2026, 10, 12)), fri, 0.99) is None   # 休場日は当日の日足が無くて正常
     assert build.stale_reason(at(17, 20, date(2026, 10, 10)), fri, 0.99) is None   # 土曜
+
+
+def test_premium_days_follow_the_settlement_calendar():
+    # 逆日歩は、受渡し（2取引日後）から次の受渡しまでの暦日数分かかる
+    from datetime import date
+    assert market_days.premium_days(date(2026, 10, 8)) == 1     # 木曜: 受渡し 10/13 → 次は 10/14
+    assert market_days.premium_days(date(2026, 10, 7)) == 4     # 水曜: 受渡し 10/9（金）→ 次は祝日明けの 10/13（火）
+    assert market_days.premium_days(date(2026, 9, 30)) == 3     # ふだんの水曜: 週末をまたいで3日
+    assert market_days.premium_days(date(2026, 10, 1)) == 1
+    # 値動きの理由の表に出す逆日歩は、合計の額と1日あたりの両方を持つ
+    p, base, disc, days, last = _reason_panel()
+    premium = pd.DataFrame([{"code": "1001", "date": pd.Timestamp("2026-10-07"), "rate": 0.2, "max_rate": 2.0, "days": 4}])
+    ex = rsn.Extras(disclosures=disc, disclosure_days=days, premium=premium)
+    pr = rsn.compute(p, base, ex, last + pd.Timedelta(hours=17)).detail["1001"]["premium"]
+    assert (pr["rate"], pr["days"], pr["daily"], pr["max"]) == (0.2, 4, 0.05, 2.0)
 
 
 def test_next_update_skips_closed_days():

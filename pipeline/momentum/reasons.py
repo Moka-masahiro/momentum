@@ -426,8 +426,11 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
     if ex.premium is not None:
         for r in ex.premium.itertuples():
             if r.rate > 0:
+                days = _int_or_none(getattr(r, "days", None))    # 何日分か（fetch.parse_premium が暦から付ける）
                 premium[r.code] = {"rate": float(r.rate), "max": float(r.max_rate) if np.isfinite(r.max_rate) else None,
-                                   "date": r.date.strftime("%Y-%m-%d") if not pd.isna(r.date) else None}
+                                   "date": r.date.strftime("%Y-%m-%d") if not pd.isna(r.date) else None,
+                                   # ファイルの額は日数分の合計なので、1日あたりに直す（連休前に跳ねて見えないように）
+                                   "days": days, "daily": round(float(r.rate) / days, 3) if days else None}
     got_days = set(ex.disclosure_days) if ex.disclosures is not None else set()
     last = len(dates) - 1
     window = range(max(len(dates) - WINDOW_DAYS, 1), len(dates))
