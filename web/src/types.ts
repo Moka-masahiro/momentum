@@ -251,6 +251,7 @@ export interface Home {
   watchlist: StockRow[];
   movers: StockRow[];               // 流動性のある銘柄のうち、理由の付いたもの（画面側で作る）
   upcoming?: StockRow[];            // これからの材料のある銘柄（画面側で作る。古いデータでは undefined）
+  next_update?: string | null;      // 次にデータが公開される予定（"2026-10-13 12:05"。古いデータでは null）
 }
 
 export interface RankingResponse {

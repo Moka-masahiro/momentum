@@ -40,6 +40,7 @@ const KEY_STORE = "m_key_v1";
 interface Meta {
   v: number;
   built: string;
+  next?: string;        // 次にデータが公開される予定（"2026-10-13 12:05"。古いデータには無い）
   salt: string;
   iterations: number;
   check: string;
@@ -213,6 +214,35 @@ export function invalidate(prefix = "") {
   for (const k of resolved.keys()) if (k.startsWith(prefix)) resolved.delete(k);
 }
 
+/* ---------------- 開きっぱなしでも新しいデータを取りに行く ---------------- */
+
+const refreshListeners = new Set<() => void>();
+let lastCheck = 0;
+
+/**
+ * アプリに戻ってきたとき（画面が再び表示されたとき）に呼ぶ。データが作り直されていれば、開いている画面を
+ * 読み直す。ホーム画面に置いたアプリは閉じずに裏に回るだけなので、これが無いと前の日のデータを出し続ける。
+ */
+export async function refreshIfUpdated(): Promise<void> {
+  if (Date.now() - lastCheck < 60_000) return; // 続けて何度も確かめない
+  lastCheck = Date.now();
+  const before = metaPromise ? await metaPromise.catch(() => null) : null;
+  if (!before) return; // まだ読み込み前（または失敗）。ふつうの読み込みに任せる
+  let after: Meta;
+  try {
+    const r = await fetch(`${DATA}meta.json`, { cache: "no-cache" });
+    if (!r.ok) return;
+    after = (await r.json()) as Meta;
+  } catch {
+    return; // 電波が無いなど。いまの表示のままにする
+  }
+  if (after.built === before.built) return;
+  metaPromise = Promise.resolve(after);
+  pending.clear();
+  resolved.clear();
+  refreshListeners.forEach((f) => f());
+}
+
 export function peek<T>(key: string): T | undefined {
   return resolved.get(key) as T | undefined;
 }
@@ -274,7 +304,7 @@ function norm(s: string): string {
 
 /* ---------------- 画面ごとの問い合わせ ---------------- */
 
-type HomeDoc = Omit<Home, "watchlist" | "movers">;
+type HomeDoc = Omit<Home, "watchlist" | "movers" | "upcoming" | "next_update">;
 
 interface SignalsDoc {
   as_of: string;
@@ -333,10 +363,11 @@ export const paths = {
 
 export const api = {
   async home(): Promise<Home> {
-    const [h, l] = await Promise.all([load<HomeDoc>("home"), latest()]);
+    const [h, l, meta] = await Promise.all([load<HomeDoc>("home"), latest(), loadMeta()]);
     return {
       ...h, watchlist: watchRows(l), movers: moverRows(l).filter((r) => r.liquid),
       upcoming: l.hasDisc ? upcomingRows(l) : undefined,
+      next_update: meta.next ?? null,
     };
   },
 
@@ -433,9 +464,12 @@ export const api = {
   },
 
   /** 設定画面用: いま見ているデータの版と、値動きの理由の材料の取得状況 */
-  async status(): Promise<{ built: string; as_of: string; universe: number; stocks: number; reasons: ReasonStatus | null }> {
+  async status(): Promise<{ built: string; next: string | null; as_of: string; universe: number; stocks: number; reasons: ReasonStatus | null }> {
     const [meta, l, h] = await Promise.all([loadMeta(), latest(), load<HomeDoc>("home")]);
-    return { built: meta.built, as_of: l.as_of, universe: l.universe, stocks: l.rows.length, reasons: h.reasons ?? null };
+    return {
+      built: meta.built, next: meta.next ?? null, as_of: l.as_of, universe: l.universe, stocks: l.rows.length,
+      reasons: h.reasons ?? null,
+    };
   },
 };
 
@@ -471,6 +505,14 @@ export function useData<T>(key: string, fetcher: () => Promise<T>) {
     setData(peek<T>(key));
     return reload();
   }, [key, reload]);
+
+  // データが作り直されたら（refreshIfUpdated）、開いている画面を読み直す
+  useEffect(() => {
+    refreshListeners.add(reload);
+    return () => {
+      refreshListeners.delete(reload);
+    };
+  }, [reload]);
 
   return { data, error, loading, reload };
 }

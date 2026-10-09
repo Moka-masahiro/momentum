@@ -1,5 +1,5 @@
 import { Component, useEffect, useState, type ReactNode } from "react";
-import { invalidate, isUnlocked, onLocked } from "./data";
+import { invalidate, isUnlocked, onLocked, refreshIfUpdated } from "./data";
 import { GuideMenu, GuideRunner, type Tour } from "./components/Guide";
 import Lock from "./components/Lock";
 import SearchSheet from "./components/SearchSheet";
@@ -69,6 +69,21 @@ function Main() {
   const [search, setSearch] = useState(false);
   const [guideMenu, setGuideMenu] = useState(false);
   const [tour, setTour] = useState<Tour | null>(null);
+
+  // アプリに戻ってきたら、新しいデータが出来ていないか確かめる（閉じずに裏に回していた場合のため）
+  useEffect(() => {
+    const onShow = () => {
+      if (document.visibilityState === "visible") void refreshIfUpdated();
+    };
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("focus", onShow);
+    window.addEventListener("online", onShow);
+    return () => {
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("focus", onShow);
+      window.removeEventListener("online", onShow);
+    };
+  }, []);
 
   const startTour = (t: Tour) => {
     setGuideMenu(false);

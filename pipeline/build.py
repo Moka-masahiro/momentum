@@ -29,6 +29,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import fetch  # noqa: E402
+import market_days  # noqa: E402
 import secure  # noqa: E402
 from momentum import data, export, reasons  # noqa: E402
 from momentum.compute import compute  # noqa: E402
@@ -59,6 +60,22 @@ def session_of(now: datetime, latest_day) -> str:
     if 9 * 60 <= t < SESSION_CLOSE_FROM:
         return "intraday"
     return "close"
+
+
+def stale_reason(now: datetime, latest_day, share: float) -> str | None:
+    """取引日の大引け後の実行なのに当日の日足がそろっていなければ、その理由（公開しない）。そろっていれば None。
+
+    Yahoo が当日分をまだ返さないと、前日のデータを「大引け後」として出してしまう（古さの検査は連休に備えて
+    6日前まで通すので、そこでは止まらない）。公開せずに終われば、予備の回がもう一度取りに行く。
+    休場日と、大引け前（朝・夜中に前の取引日の分を作るとき）は対象外。
+    """
+    if not market_days.is_trading_day(now.date()) or now.hour * 60 + now.minute < SESSION_CLOSE_FROM:
+        return None
+    if latest_day != now.date():
+        return f"取引日の大引け後なのに、当日の日足がまだありません（最新は {latest_day}）"
+    if share < MIN_TODAY_SHARE:
+        return f"当日の値が付いた銘柄が少なすぎます（{share * 100:.1f}%）"
+    return None
 
 
 def _today_share(bars: pd.DataFrame) -> float:
@@ -105,6 +122,11 @@ def main() -> int:
         if share < MIN_TODAY_SHARE and not args.limit:
             logger.error("取引時間中なのに当日の値が付いた銘柄が少なすぎます（%.1f%%）。公開しません", share * 100)
             return 1
+    elif args.session == "auto" and not args.cache and not args.limit:   # 手元の確認（古いキャッシュ）では止めない
+        stale = stale_reason(datetime.now(JST), latest.date(), _today_share(bars))
+        if stale:
+            logger.error("%s。公開しません", stale)
+            return 1
 
     panel = data.make_panel(bars, master)
     st = compute(panel, index)
@@ -129,6 +151,8 @@ def main() -> int:
     meta = {
         "v": 1,
         "built": built,
+        # 次にデータが公開される予定（画面が「更新が届いていない」と気づくため。休場日は飛ばす）
+        "next": market_days.next_update(datetime.now(JST)).strftime("%Y-%m-%d %H:%M"),
         "salt": cfg["salt"],
         "iterations": cfg["iterations"],
         # 合言葉が正しいかを画面側で確かめるための小さな暗号文

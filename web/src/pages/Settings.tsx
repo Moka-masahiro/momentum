@@ -2,12 +2,12 @@ import { useEffect, useState } from "react";
 import { api, forgetKey, invalidate } from "../data";
 import { GuideMenu, type Tour } from "../components/Guide";
 import { Card, Icon } from "../components/ui";
-import { mdDate, num, slashDate } from "../format";
+import { mdDate, mdTime, num, slashDate } from "../format";
 import { back, setFlag } from "../router";
 import type { ReasonStatus, SourceStatus } from "../types";
 import { addMany, watchlist } from "../watch";
 
-type Status = { built: string; as_of: string; universe: number; stocks: number; reasons: ReasonStatus | null };
+type Status = { built: string; next: string | null; as_of: string; universe: number; stocks: number; reasons: ReasonStatus | null };
 
 function source(s: SourceStatus | undefined, label: string) {
   if (!s) return "—";
@@ -60,6 +60,7 @@ export default function Settings({ onStartTour }: { onStartTour: (t: Tour) => vo
           <tbody>
             <tr><td>データ日付（最新の日足）</td><td>{st ? slashDate(st.as_of) : "—"}</td></tr>
             <tr><td>データを作った時刻</td><td>{st?.built ?? "—"}</td></tr>
+            <tr><td>次の更新の予定</td><td>{st?.next ? `${mdTime(st.next)} ごろ` : "—"}</td></tr>
             <tr><td>銘柄数（うち流動性あり）</td><td>{st ? `${num(st.stocks)}（${num(st.universe)}）` : "—"}</td></tr>
             {st && (
               <>
@@ -82,8 +83,9 @@ export default function Settings({ onStartTour }: { onStartTour: (t: Tour) => vo
         </table>
         {err && <p className="t-warn text-[12px] mt-2 break-all">{err}</p>}
         <p className="note mt-2">
-          平日の夕方（17時ごろ）に GitHub Actions が全銘柄の日足を取り直し、指標を計算してここに置き直します。
-          PC の電源は要りません。GitHub の混雑で30分ほど遅れることがあります。
+          取引のある日の昼（12時ごろ。前場までの途中経過）と夕方（17時半ごろ）に、GitHub Actions が全銘柄の日足を
+          取り直し、指標を計算してここに置き直します。PC の電源は要りません。土日・祝日・年末年始は更新しません。
+          アプリを開いたままにしていても、戻ってきたときに新しいデータがあれば読み直します。
         </p>
         <button className="btn-ghost w-full mt-2" onClick={reload}>最新のデータを読み込み直す</button>
       </Card>

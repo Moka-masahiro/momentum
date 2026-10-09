@@ -33,7 +33,8 @@ concurrency:
 jobs:
   # 自動の実行（外部のタイマー・GitHub の定時実行）は、届いた時刻の回（前場の引け後・大引け後）の
   # データがもう公開済みなら何もしない（予備の時刻の実行は、ふだんここで終わる）。どちらの回の時間帯でもない
-  # 時刻に遅れて届いた分も何もしない（pipeline/should_build.py）。手動の「Run workflow」はいつでも作り直す
+  # 時刻に遅れて届いた分と、休場日（祝日・年末年始）の分も何もしない（pipeline/should_build.py）。
+  # 手動の「Run workflow」はいつでも作り直す
   check:
     runs-on: ubuntu-latest
     outputs:

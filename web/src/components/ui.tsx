@@ -244,7 +244,7 @@ export function ErrorBox({ message, onRetry }: { message: string; onRetry?: () =
       </div>
       <div className="t-2 text-sm mt-2 break-all">{message}</div>
       <div className="note mt-2">
-        電波の状態を確認してください。データは平日の夕方に GitHub で作り直しており、その直後の数分はつながらないことがあります。
+        電波の状態を確認してください。データは取引のある日の昼と夕方に GitHub で作り直しており、その直後の数分はつながらないことがあります。
       </div>
       {onRetry && (
         <button className="btn-ghost mt-3" onClick={onRetry}>
@@ -326,7 +326,7 @@ export function ScopeChecks({ liquidOnly, onLiquid, watchOnly, onWatch, hasWatch
 export function Disclaimer() {
   return (
     <p className="note mt-4 px-1">
-      価格は yfinance（無料・非公式）の日足で、リアルタイムではありません。指標とシグナルは決まったルールで機械的に計算した参考情報で、売買の推奨ではありません。実績の数字は過去約2年分の日足による検証結果で、将来も同じになるとは限りません。値動きの理由は、会社の適時開示（やのしん TDnet WEB-API 経由）と JPX の公表データから機械的に付けた手がかりで、原因の証明ではありません。データは平日の夕方に GitHub Actions が自動で作り直しています。
+      価格は yfinance（無料・非公式）の日足で、リアルタイムではありません。指標とシグナルは決まったルールで機械的に計算した参考情報で、売買の推奨ではありません。実績の数字は過去約2年分の日足による検証結果で、将来も同じになるとは限りません。値動きの理由は、会社の適時開示（やのしん TDnet WEB-API 経由）と JPX の公表データから機械的に付けた手がかりで、原因の証明ではありません。データは取引のある日の昼と夕方に GitHub Actions が自動で作り直しています。
       チャート: <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer" className="underline">TradingView Lightweight Charts™</a>
     </p>
   );

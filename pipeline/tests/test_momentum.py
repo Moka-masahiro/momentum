@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import build  # noqa: E402
 import fetch  # noqa: E402
+import market_days  # noqa: E402
 import secure  # noqa: E402
 import should_build  # noqa: E402
 from momentum import data, export, indicators as ind, reasons as rsn, signals as sig  # noqa: E402
@@ -459,6 +460,68 @@ def test_should_build_by_arrival_time():
     for now in ("2026-09-30 09:40", "2026-09-30 14:00", "2026-09-30 16:30", "2026-10-03 17:30"):
         assert not auto(now, "2026-09-29 17:12"), now          # 朝・取引時間中・大引け直後・土曜
     assert should_build.decide(at("2026-09-30 01:07"), "2026-09-30 00:50", manual=True)[0]   # 手動はいつでも
+
+
+def test_market_days_match_the_official_holidays():
+    # 内閣府「国民の祝日」の一覧（2026-10-09 に取得した CSV）。振替休日（2025-02-24・2026-05-06・2027-03-22）と
+    # 国民の休日（2026-09-22。敬老の日と秋分の日に挟まれた日）を含む
+    from datetime import date
+    official = {
+        2025: "1/1 1/13 2/11 2/23 2/24 3/20 4/29 5/3 5/4 5/5 5/6 7/21 8/11 9/15 9/23 10/13 11/3 11/23 11/24",
+        2026: "1/1 1/12 2/11 2/23 3/20 4/29 5/3 5/4 5/5 5/6 7/20 8/11 9/21 9/22 9/23 10/12 11/3 11/23",
+        2027: "1/1 1/11 2/11 2/23 3/21 3/22 4/29 5/3 5/4 5/5 7/19 8/11 9/20 9/23 10/11 11/3 11/23",
+    }
+    for year, days in official.items():
+        want = {date(year, *map(int, d.split("/"))) for d in days.split()}
+        assert market_days.national_holidays(year) == want, (year, sorted(market_days.national_holidays(year) ^ want))
+    td = market_days.is_trading_day
+    assert not td(date(2026, 10, 12)) and td(date(2026, 10, 13))            # スポーツの日（月）
+    assert not td(date(2026, 12, 31)) and not td(date(2027, 1, 1)) and td(date(2026, 12, 30)) and td(date(2027, 1, 4))
+    assert not td(date(2026, 10, 10))                                        # 土曜
+    assert market_days.previous_trading_day(date(2026, 10, 13)) == date(2026, 10, 9)   # 祝日と土日をまたぐ
+    assert market_days.previous_trading_day(date(2027, 1, 4)) == date(2026, 12, 30)    # 年末年始をまたぐ
+
+
+def test_should_build_skips_market_holidays():
+    # 2026-10-12（月・スポーツの日）: タイマーは祝日を知らずに 11:53・17:17・18:47 に頼んでくる。
+    # 以前は、金曜の大引けと同じ中身を2回作っていた
+    from datetime import datetime
+    at = lambda s: datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=should_build.JST)  # noqa: E731
+    auto = lambda now, built: should_build.decide(at(now), built, manual=False)[0]  # noqa: E731
+    for now in ("2026-10-12 11:53", "2026-10-12 17:17", "2026-10-12 18:47"):
+        assert not auto(now, "2026-10-09 17:25"), now
+    assert auto("2026-10-13 11:53", "2026-10-09 17:25")       # 休み明けはふだんどおり
+    assert not auto("2026-12-31 17:17", "2026-12-30 17:25")   # 年末年始も休場
+    # 金曜の大引けのデータが出来ていなければ、休場日でも作る（作ったあとは作らない）
+    assert auto("2026-10-12 11:53", "2026-10-09 12:01")
+    assert not auto("2026-10-12 17:17", "2026-10-12 12:01")
+    assert not auto("2026-10-12 14:00", "2026-10-09 12:01")   # 時間帯の外では作らない
+    assert should_build.decide(at("2026-10-12 14:00"), "2026-10-09 17:25", manual=True)[0]   # 手動はいつでも
+
+
+def test_stale_close_data_is_not_published():
+    # 取引日の大引け後なのに Yahoo が当日分を返さないと、前日のデータを「大引け後」として出してしまう
+    from datetime import date, datetime
+    fri, thu = date(2026, 10, 9), date(2026, 10, 8)
+    at = lambda h, m, d=fri: datetime(d.year, d.month, d.day, h, m, tzinfo=build.JST)  # noqa: E731
+    assert build.stale_reason(at(17, 20), fri, 0.99) is None
+    assert "当日の日足がまだありません" in build.stale_reason(at(17, 20), thu, 0.99)
+    assert "少なすぎます" in build.stale_reason(at(17, 20), fri, 0.30)      # 当日分が一部の銘柄にしか無い
+    assert build.stale_reason(at(8, 0), thu, 0.99) is None                  # 朝に前の取引日の分を作るのは正常
+    assert build.stale_reason(at(11, 55), thu, 0.99) is None                # 昼は対象外（前場の検査は別にある）
+    assert build.stale_reason(at(17, 20, date(2026, 10, 12)), fri, 0.99) is None   # 休場日は当日の日足が無くて正常
+    assert build.stale_reason(at(17, 20, date(2026, 10, 10)), fri, 0.99) is None   # 土曜
+
+
+def test_next_update_skips_closed_days():
+    from datetime import datetime
+    at = lambda s: datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=build.JST)  # noqa: E731
+    nxt = lambda s: market_days.next_update(at(s)).strftime("%Y-%m-%d %H:%M")        # noqa: E731
+    assert nxt("2026-10-08 12:01") == "2026-10-08 17:30"      # 昼の実行のあとは夕方（自分自身の 12:05 は数えない）
+    assert nxt("2026-10-08 17:25") == "2026-10-09 12:05"      # 夕方の実行のあとは翌日の昼
+    assert nxt("2026-10-09 17:25") == "2026-10-13 12:05"      # 金曜の夕方 → 土日と祝日（10/12）を飛ばして火曜
+    assert nxt("2026-10-09 11:00") == "2026-10-09 12:05"      # 午前に手で作った場合
+    assert nxt("2026-12-30 17:25") == "2027-01-04 12:05"      # 年末年始
 
 
 def test_morning_session_uses_morning_volume_and_cutoff():

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api, paths, useData } from "../data";
 import { Card, Delta, DiscChip, ErrorBox, Icon, Loading, RankBadge, RowMarks, Disclaimer, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
 import Spark from "../components/Spark";
-import { mdDate, num, pct, slashDate, yen } from "../format";
+import { mdDate, mdTime, num, pct, slashDate, yen } from "../format";
 import { flag, go, setFlag } from "../router";
 import type { Home as HomeData, StockRow, Why } from "../types";
 
@@ -29,6 +29,7 @@ export default function Home({ onGuide }: { onGuide: () => void }) {
         </div>
       </header>
       <SessionNote session={data?.session} className="mb-2 px-1" />
+      {data && <StaleNotice data={data} />}
 
       {welcome && (
         <div className="card mb-3" style={{ borderColor: "rgba(232,199,111,0.5)" }}>
@@ -80,6 +81,19 @@ export default function Home({ onGuide }: { onGuide: () => void }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** 予定の時刻を1時間過ぎても新しいデータが届いていなければ知らせる（更新の失敗に気づけるように） */
+function StaleNotice({ data }: { data: HomeData }) {
+  if (!data.next_update) return null;
+  const due = Date.parse(`${data.next_update.replace(" ", "T")}:00+09:00`);
+  if (!(Date.now() > due + 60 * 60 * 1000)) return null;
+  return (
+    <p className="note t-warn mb-2 px-1" role="status">
+      予定していた更新（{mdTime(data.next_update)} ごろ）がまだ届いていません。表示しているのは {slashDate(data.as_of)} のデータです。
+      電波のある場所で開き直しても変わらなければ、更新が失敗している可能性があります。
+    </p>
   );
 }
 
