@@ -312,6 +312,7 @@ function DisclosureList({ items }: { items: Disclosure[] }) {
                 <div className="flex items-center gap-1.5 text-[11.5px] t-3">
                   <span className="num">{mdTime(x.time)}</span>
                   <span className={`why ${KIND_CLASS[x.kind]}`}>{x.category}</span>
+                  {x.late && <span className="why why-new">新着</span>}
                 </div>
                 <DisclosureTitle x={x} className="text-[12.5px] mt-1 leading-snug" />
               </div>

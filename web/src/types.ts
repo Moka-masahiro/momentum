@@ -45,6 +45,8 @@ export interface StockRow {
   std_ratio?: number | null;  // 制度信用倍率（1倍未満＝売り長。倍率の無い銘柄は null）
   disc?: string | null;       // これからの材料（引け後の開示など）の分類。無ければ null
   disc_text?: string | null;  // その短い文言
+  disc_new?: string | null;       // これからの材料のうち新着（開示だけの更新で見つかったもの）の分類。無ければ null
+  disc_new_text?: string | null;  // その短い文言
 }
 
 export interface Disclosure {
@@ -55,6 +57,7 @@ export interface Disclosure {
   url: string | null;       // TDnet の PDF（31日で消える）
   day: string | null;       // その開示が効いた取引日（null = まだ来ていない）
   pending?: "next" | "pm" | null;   // day が null のとき: next = 次の取引日の材料 / pm = 後場の材料
+  late?: boolean;           // 新着（株価を取得したあとで、開示だけ取り直して見つかったもの）
   ret?: number | null;      // その日の騰落率（%）
   idio?: number | null;     // その日の業種の中央値との差（%）
 }
@@ -152,6 +155,7 @@ export interface FeedItem {
   day: string | null;               // 効いた取引日（これからの材料は null）
   ret: number | null;               // その日の騰落率（%）
   idio: number | null;              // その日の業種の中央値との差（%）
+  late?: boolean | null;            // 新着（株価を取得したあとで、開示だけ取り直して見つかったもの）
 }
 
 /** 銘柄ごとにまとめた開示（先頭がいちばん効きそうなもの） */
@@ -166,6 +170,8 @@ export interface DisclosuresResponse {
   session: Session;
   ok: boolean;                      // 開示を取得できたか
   latest: string | null;            // 取得できた最も新しい開示の時刻
+  fetched: string | null;           // 開示を最後に取得した時刻（古いデータでは null）
+  since: string | null;             // 新着の基準＝株価と一緒に開示を取得した時刻（開示だけの更新のときだけ）
   upcoming: DisclosureGroup[];      // これからの材料（引け後の開示＝次の取引日、昼の更新では後場）
   today: DisclosureGroup[];         // 最新日に効いた開示（その日の値動き付き）
 }
@@ -178,7 +184,11 @@ export interface SourceStatus {
 
 export interface ReasonStatus {
   date: string;
-  disclosures: { ok: boolean; count: number; latest: string | null; days_failed: number; error: string | null };
+  disclosures: {
+    ok: boolean; count: number; latest: string | null; days_failed: number; error: string | null;
+    fetched?: string | null;   // 開示を最後に取得した時刻（古いデータには無い）
+    since?: string | null;     // 新着の基準（開示だけの更新のときだけ）
+  };
   short: SourceStatus;
   flags: SourceStatus;
   premium: SourceStatus;
@@ -231,6 +241,7 @@ export interface Home {
   as_of: string;
   session?: Session;         // 古いデータには無い（= close）
   computed_at: string;
+  prices_at?: string;        // 株価を取得した時刻。開示だけ取り直した更新では computed_at より前（古いデータには無い）
   universe: number;
   market: {
     nikkei: IndexSummary | null;

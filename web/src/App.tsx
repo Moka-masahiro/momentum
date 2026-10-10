@@ -115,7 +115,7 @@ function Main() {
       view = <Margin />;
       break;
     case "disclosures":
-      view = <Disclosures />;
+      view = <Disclosures key={arg ?? "all"} initial={arg} />;
       break;
     case "verify":
       view = <Verify />;

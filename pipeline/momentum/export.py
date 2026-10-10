@@ -30,10 +30,11 @@ LATEST_COLUMNS = (
     "code", "name", "segment", "sector33", "close", "chg1", "chg5", "chg20", "chg60",
     "score", "rank", "score_d1", "score_d5", "score_d20", "position", "turnover20",
     "liquid", "base", "traded_today", "last_date", "signals_today", "t",
-    "why", "why_text", "idio", "vr", "disc", "disc_text", "std_ratio",
+    "why", "why_text", "idio", "vr", "disc", "disc_text", "std_ratio", "disc_new", "disc_new_text",
 )
-# 開示の一覧の列（reasons.compute の feed）。pending が next / pm のものは、まだ値動きに効いていない
-DISCLOSURE_COLUMNS = ("code", "time", "category", "kind", "title", "url", "pending", "day", "ret", "idio")
+# 開示の一覧の列（reasons.compute の feed）。pending が next / pm のものは、まだ値動きに効いていない。
+# late は新着（株価を取得したあとで、開示だけ取り直して見つかったもの）
+DISCLOSURE_COLUMNS = ("code", "time", "category", "kind", "title", "url", "pending", "day", "ret", "idio", "late")
 # 制度信用倍率の一覧の列（残高は制度信用の分だけ。reasons._std_margin）
 MARGIN_COLUMNS = ("code", "loan", "buy", "buy_chg", "sell", "sell_chg", "ratio", "ratio_prev",
                   "buy_days", "sell_days", "premium", "premium_max")
@@ -90,6 +91,9 @@ def row(code: str, r: pd.Series) -> dict:
         "disc": _str(r.get("disc")),
         "disc_text": _str(r.get("disc_text")),
         "std_ratio": _r(r.get("std_ratio"), 3),   # 制度信用倍率（1倍未満＝売り長。倍率の無い銘柄は None）
+        # これからの材料のうち新着（開示だけの更新で見つかったもの）の分類と短い文言。無ければ None
+        "disc_new": _str(r.get("disc_new")),
+        "disc_new_text": _str(r.get("disc_new_text")),
     }
 
 
@@ -134,6 +138,8 @@ def _home(st: State, rows: dict, market: dict, built_at: str, margin: dict) -> d
         "as_of": st.as_of,
         "session": st.session,     # am = 前場の引け後の途中経過（夕方の実行で大引けに置き換わる）
         "computed_at": built_at,
+        # 株価を取得した時刻。開示だけ取り直した更新では computed_at より前（開示の時刻は reasons.disclosures.fetched）
+        "prices_at": st.prices_at or built_at,
         "universe": int(df["universe"].iloc[0]) if len(df) else 0,
         "market": {
             "nikkei": {k: v for k, v in (market["nikkei"] or {}).items()
@@ -236,6 +242,8 @@ def _disclosures(st: State) -> dict:
         "session": st.session,
         "ok": bool(rs and rs.status["disclosures"]["ok"]),
         "latest": rs.status["disclosures"]["latest"] if rs else None,   # 取得できた最も新しい開示の時刻
+        "fetched": rs.status["disclosures"]["fetched"] if rs else None,  # 開示を最後に取得した時刻
+        "since": rs.status["disclosures"]["since"] if rs else None,      # 新着の基準（株価と一緒に取得した時刻）
         "columns": list(DISCLOSURE_COLUMNS),
         "rows": [[x.get(c) for c in DISCLOSURE_COLUMNS] for x in parts],
     })

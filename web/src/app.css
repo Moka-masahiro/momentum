@@ -211,6 +211,8 @@ button.tile:active,
 .why-market { color: #8fdcc8; background: rgba(120, 210, 190, 0.12); border-color: rgba(120, 210, 190, 0.45); }
 .why-unknown { color: var(--text-2); background: transparent; border-color: var(--line-strong); border-style: dashed; }
 .why-routine { color: var(--text-3); background: transparent; border-color: rgba(120, 200, 230, 0.2); }
+/* 新着（株価を取得したあとで、開示だけ取り直して見つかったもの）。分類の印と紛れないよう、これだけ塗りつぶす */
+.why-new { color: #221a05; background: var(--gold); border-color: var(--gold); }
 
 /* --- 一覧 --- */
 .list-head {

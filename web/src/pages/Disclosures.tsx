@@ -7,16 +7,18 @@ import type { DisclosureGroup, DisclosuresResponse, FeedItem } from "../types";
 import { watchlist } from "../watch";
 
 type Tab = "upcoming" | "today";
+const NEW = "@new";   // 分類の絞り込みに並べる「新着」（分類ではなく、開示だけの更新で見つかったもの）
 
 /**
  * 会社の適時開示の一覧（定例を除く）。「これからの材料」は引け後に出て、まだ値動きに効いていない開示
  * （昼の更新では 11:30 以降＝後場の材料）。「効いた開示」は最新日の値動きに効いた開示と、その日の騰落率。
  * 並びと分類は pipeline/momentum/reasons.py・export.py が決める。ここは絞り込むだけ。
+ * 「新着」は、株価を取得した夕方の更新のあとで、開示だけ取り直して見つかったもの（#/disclosures/new で絞って開く）。
  */
-export default function Disclosures() {
+export default function Disclosures({ initial }: { initial?: string }) {
   const { data, error, loading, reload } = useData<DisclosuresResponse>(paths.disclosures, api.disclosures);
   const [tab, setTab] = useState<Tab>("upcoming");
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(initial === "new" ? NEW : "");
   const [liquidOnly, setLiquidOnly] = useState(true);
   const [watchOnly, setWatchOnly] = useState(false);
   const [limit, setLimit] = useState(50);
@@ -27,9 +29,11 @@ export default function Disclosures() {
   const base = pool(tab);
   const counts = new Map<string, number>();
   for (const g of base) for (const c of new Set(g.items.map((x) => x.category))) counts.set(c, (counts.get(c) ?? 0) + 1);
-  const active = counts.has(category) ? category : "";
-  const head = (g: DisclosureGroup): FeedItem => (active && g.items.find((x) => x.category === active)) || g.items[0];
-  const hits = active ? base.filter((g) => g.items.some((x) => x.category === active)) : base;
+  const fresh = base.filter((g) => g.items.some((x) => x.late)).length;
+  const active = category === NEW ? (fresh > 0 ? NEW : "") : counts.has(category) ? category : "";
+  const match = (x: FeedItem) => (active === NEW ? !!x.late : x.category === active);
+  const head = (g: DisclosureGroup): FeedItem => (active && g.items.find(match)) || g.items[0];
+  const hits = active ? base.filter((g) => g.items.some(match)) : base;
   // これからの材料はデータの順（売買代金の大きい順）、効いた開示は業種との差の大きい順（反応の大きかったものから）。
   // どちらも、ウォッチリストの銘柄を先頭に寄せる
   const rows = (tab === "today" ? [...hits].sort((a, b) => Math.abs(head(b).idio ?? 0) - Math.abs(head(a).idio ?? 0)) : [...hits])
@@ -58,6 +62,7 @@ export default function Disclosures() {
             <div className="mt-2">
               <Seg value={active} onChange={(v) => { setCategory(v); reset(); }}
                 options={[{ value: "", label: `すべて ${base.length}` },
+                  ...(fresh > 0 ? [{ value: NEW, label: `新着 ${fresh}` }] : []),
                   ...[...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => ({ value: c, label: `${c} ${n}` }))]} />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-3">
@@ -82,8 +87,12 @@ export default function Disclosures() {
                   <span className="list-name">
                     <b>{g.watched && <span className="t-gold">★ </span>}{g.stock.name}</b>
                     <small className="list-sub">
+                      {x.late && <span className="why why-new">新着</span>}
                       <span className={`why why-${x.kind}`}>{x.category}</span>
-                      <span>{g.stock.code} · {when(x)}{g.items.length > 1 ? ` · ほか${g.items.length - 1}件` : ""}</span>
+                      <span>
+                        {g.stock.code} · {when(x)}{g.items.length > 1 ? ` · ほか${g.items.length - 1}件` : ""}
+                        {!x.late && g.items.some((y) => y.late) ? "（新着あり）" : ""}
+                      </span>
                     </small>
                     <span className="list-title">{x.title}</span>
                   </span>
@@ -110,10 +119,16 @@ export default function Disclosures() {
               <li>・<b>効いた開示</b>は、前の取引日の引け後から{am ? "前場の引け" : "当日の引け"}までに出た開示と、その日の騰落率です。業種平均との差が大きい順に並べています（ウォッチリストの銘柄は先頭）。</li>
               <li>・同じ銘柄に複数の開示があるときは、いちばん重要そうなものを見出しにして「ほか◯件」と出します。銘柄を押すと、詳細の「値動きの理由」で全部の表題と PDF を確認できます。</li>
               <li>・分類は表題の言葉から機械的に付けています（当てはまらないものは「その他」）。ガバナンス報告書や招集通知などの定例のものは出しません。ランクはモメンタム度のランクです。</li>
+              <li>
+                ・夕方の更新のあとに出た開示は、夜（19時前と20時すぎ）と翌朝（8時40分ごろ）に開示だけ取り直して足し、<span className="why why-new">新着</span> の印を付けます。株価と指標は夕方のままです。
+                {data.since ? `いまの新着は、株価を取得した ${mdTime(data.since)} より後に見つかったものです。` : ""}
+              </li>
             </ul>
             <p className="note mt-3">
               出どころは会社の適時開示（やのしん TDnet WEB-API 経由）。
-              {data.latest ? `取得できた最も新しい開示は ${mdTime(data.latest)}。これより後に出た開示は、次の更新で入ります。` : ""}
+              {data.fetched
+                ? `${mdTime(data.fetched)} に取得${data.latest ? `（最も新しい開示は ${mdTime(data.latest)}）` : ""}。これより後に出た開示は、次の更新で入ります。`
+                : data.latest ? `取得できた最も新しい開示は ${mdTime(data.latest)}。これより後に出た開示は、次の更新で入ります。` : ""}
               新聞報道やアナリストの格付けは含みません。該当 {num(rows.length)} 銘柄。
             </p>
           </Card>

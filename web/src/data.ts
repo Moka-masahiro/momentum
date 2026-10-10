@@ -321,6 +321,8 @@ interface FeedDoc {
   session?: Session;
   ok: boolean;
   latest: string | null;
+  fetched?: string | null;
+  since?: string | null;
   columns: string[];
   rows: unknown[][];
 }
@@ -340,13 +342,13 @@ function moverRows(l: Latest): StockRow[] {
     .sort((a, b) => Math.abs(b.idio ?? 0) - Math.abs(a.idio ?? 0));
 }
 
-/** これからの材料のある銘柄（ホーム用）。ウォッチリスト → 流動性あり → 売買代金の大きい順 */
+/** これからの材料のある銘柄（ホーム用）。ウォッチリスト → 流動性あり → 新着のあるもの → 売買代金の大きい順 */
 function upcomingRows(l: Latest): StockRow[] {
   const w = new Set(watchlist());
   return l.rows
     .filter((r) => r.disc)
     .sort((a, b) => Number(w.has(b.code)) - Number(w.has(a.code)) || Number(b.liquid) - Number(a.liquid)
-      || (b.turnover20 ?? 0) - (a.turnover20 ?? 0));
+      || Number(!!b.disc_new) - Number(!!a.disc_new) || (b.turnover20 ?? 0) - (a.turnover20 ?? 0));
 }
 
 export const paths = {
@@ -425,6 +427,7 @@ export const api = {
     }
     return {
       as_of: doc.as_of, session: doc.session ?? "close", ok: doc.ok, latest: doc.latest,
+      fetched: doc.fetched ?? null, since: doc.since ?? null,
       upcoming: [...tabs.upcoming.values()], today: [...tabs.today.values()],
     };
   },
@@ -464,11 +467,11 @@ export const api = {
   },
 
   /** 設定画面用: いま見ているデータの版と、値動きの理由の材料の取得状況 */
-  async status(): Promise<{ built: string; next: string | null; as_of: string; universe: number; stocks: number; reasons: ReasonStatus | null }> {
+  async status(): Promise<{ built: string; prices_at: string; next: string | null; as_of: string; universe: number; stocks: number; reasons: ReasonStatus | null }> {
     const [meta, l, h] = await Promise.all([loadMeta(), latest(), load<HomeDoc>("home")]);
     return {
-      built: meta.built, next: meta.next ?? null, as_of: l.as_of, universe: l.universe, stocks: l.rows.length,
-      reasons: h.reasons ?? null,
+      built: meta.built, prices_at: h.prices_at ?? meta.built, next: meta.next ?? null,
+      as_of: l.as_of, universe: l.universe, stocks: l.rows.length, reasons: h.reasons ?? null,
     };
   },
 };

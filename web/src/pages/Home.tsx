@@ -227,12 +227,17 @@ function UpcomingCard({ data }: { data: HomeData }) {
   const liquid = rows.filter((r) => r.liquid);
   const counts = new Map<string, number>();
   for (const r of liquid) counts.set(r.disc!, (counts.get(r.disc!) ?? 0) + 1);
-  const ok = data.reasons?.disclosures.ok;
+  const fresh = liquid.filter((r) => r.disc_new).length;
+  const st = data.reasons?.disclosures;
+  const ok = st?.ok;
   return (
     <Card icon="doc" title={am ? "後場の材料" : "次の取引日の材料"} link="一覧を見る" onLink={() => go("disclosures")} guide="disclosures-home"
       sub={`${am ? "前場の引け（11:30）" : "大引け（15:30）"}より後に出た会社の開示（定例を除く）。まだ株価には反映されていません`}>
       {ok === false && <p className="note t-warn mb-2">開示を取得できなかった日があります。</p>}
       <div className="flex flex-wrap gap-1.5">
+        {fresh > 0 && (
+          <button className="why why-new !text-[12px] !py-1.5 !px-2" onClick={() => go("disclosures/new")}>新着 {fresh}</button>
+        )}
         {[...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([c, n]) => (
           <button key={c} className="why why-unknown !text-[12px] !py-1.5 !px-2" onClick={() => go("disclosures")}>{c} {n}</button>
         ))}
@@ -242,14 +247,24 @@ function UpcomingCard({ data }: { data: HomeData }) {
           <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr 40px" }} onClick={() => go(`stock/${r.code}`)}>
             <span className="list-name">
               <b>{r.name}</b>
-              <small className="list-sub"><DiscChip category={r.disc} /><span className="why-text">{r.disc_text}</span></small>
+              <small className="list-sub">
+                {r.disc_new ? (
+                  <><span className="why why-new">新着</span><DiscChip category={r.disc_new} /><span className="why-text">{r.disc_new_text}</span></>
+                ) : (
+                  <><DiscChip category={r.disc} /><span className="why-text">{r.disc_text}</span></>
+                )}
+              </small>
             </span>
             <span className="text-center"><RankBadge rank={r.rank} /></span>
           </button>
         ))}
         {rows.length === 0 && <p className="note mt-1">{am ? "前場の引けより後" : "引け後"}の開示は、まだありません。</p>}
       </div>
-      {rows.length > 0 && <p className="note mt-2">流動性のある {num(liquid.length)} 銘柄（全体では {num(rows.length)} 銘柄）。ウォッチリストの銘柄を先に、次に売買代金の大きい順。</p>}
+      <p className="note mt-2">
+        {st?.fetched ? `開示は ${mdTime(st.fetched)} に取得。` : ""}
+        {rows.length > 0 ? `流動性のある ${num(liquid.length)} 銘柄（全体では ${num(rows.length)} 銘柄）。ウォッチリストの銘柄を先に、次に${st?.since ? "新着、" : ""}売買代金の大きい順。` : ""}
+        {st?.since ? `新着は、株価を取得した ${mdTime(st.since)} より後に、開示だけ取り直して見つかったものです。` : ""}
+      </p>
     </Card>
   );
 }

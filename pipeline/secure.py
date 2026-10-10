@@ -44,12 +44,20 @@ def derive_key(passphrase: str, cfg: dict) -> bytes:
 
 def seal(obj, key: bytes) -> bytes:
     raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    packed = gzip.compress(raw, compresslevel=9, mtime=0)
-    iv = os.urandom(12)
-    return iv + AESGCM(key).encrypt(iv, packed, None)
+    return seal_bytes(gzip.compress(raw, compresslevel=9, mtime=0), key)
 
 
 def open_sealed(blob: bytes, key: bytes):
     """テスト用（画面側と同じ手順で戻せることの確認）。"""
-    packed = AESGCM(key).decrypt(blob[:12], blob[12:], None)
-    return json.loads(gzip.decompress(packed).decode("utf-8"))
+    return json.loads(gzip.decompress(open_bytes(blob, key)).decode("utf-8"))
+
+
+def seal_bytes(raw: bytes, key: bytes) -> bytes:
+    """バイト列をそのまま暗号化する。[IV 12バイト][暗号文＋認証タグ]"""
+    iv = os.urandom(12)
+    return iv + AESGCM(key).encrypt(iv, raw, None)
+
+
+def open_bytes(blob: bytes, key: bytes) -> bytes:
+    """seal_bytes を戻す。鍵が違う・中身が1ビットでも変わっていると例外になる（認証付き暗号）。"""
+    return AESGCM(key).decrypt(blob[:12], blob[12:], None)

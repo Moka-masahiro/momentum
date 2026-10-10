@@ -7,17 +7,25 @@ on:
   #   平日 11:53 JST: 前場の引け（11:30）のあと。Yahoo の値は20分ほど遅れるので11時50分過ぎにし、
   #     後場の始まる12:30までに公開する。当日の日足は前場の値までの途中経過（画面に「前場」と出る）
   #   平日 17:17 JST と、取りこぼしに備えた予備の 18:47 JST: 大引け後。JPX の信用残・品貸料は16時ごろ公表なので17時台で間に合う
+  #   平日 18:47・20:17・翌朝 08:37 JST: 開示だけ取り直す（株価は 17:17 に取得した分を使い回す）。夕方の更新のあとに
+  #     出た開示を拾う。18:47 は予備の回を兼ねる（大引けのデータがまだ無ければ全体を作り、あれば開示だけ）
   # GitHub 自身の定時実行（下の cron。時刻は同じ）は予備。2026-08-27 ごろから5〜7時間遅れて届くようになり
   #   （9/29 は3回とも6時間12〜33分遅れ）、分をずらしても直らないと報告されている。
-  #   遅れて届いた分は、届いた時刻でどの回の分かを決め直す（pipeline/should_build.py）
+  #   遅れて届いた分は、届いた時刻で何をするかを決め直す（pipeline/should_build.py）
   schedule:
+    - cron: "37 23 * * 0-4" # 08:37 JST（月〜金）
     - cron: "53 2 * * 1-5" # 11:53 JST
     - cron: "17 8 * * 1-5" # 17:17 JST
     - cron: "47 9 * * 1-5" # 18:47 JST
+    - cron: "17 11 * * 1-5" # 20:17 JST
   workflow_dispatch: # Actions の画面の「Run workflow」で手動実行できる（auto を外したままなら、いつでも作り直す）
     inputs:
       auto:
         description: 外部のタイマーからの自動実行（手で動かすときは外したまま）
+        type: boolean
+        default: false
+      light:
+        description: 開示だけ取り直す（株価は前回の大引け後の取得分を使う。約3分）
         type: boolean
         default: false
 
@@ -31,14 +39,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 自動の実行（外部のタイマー・GitHub の定時実行）は、届いた時刻の回（前場の引け後・大引け後）の
-  # データがもう公開済みなら何もしない（予備の時刻の実行は、ふだんここで終わる）。どちらの回の時間帯でもない
-  # 時刻に遅れて届いた分と、休場日（祝日・年末年始）の分も何もしない（pipeline/should_build.py）。
-  # 手動の「Run workflow」はいつでも作り直す
+  # 自動の実行（外部のタイマー・GitHub の定時実行）は、届いた時刻で何をするかを決める（pipeline/should_build.py）。
+  #   full  = 全体の更新。届いた時刻の回（前場の引け後・大引け後）のデータがまだ無いとき
+  #   light = 開示だけの更新。大引けのデータは公開済みで、そのあとに開示が出ている見込みがあるとき
+  #   skip  = 何もしない。取引時間中に遅れて届いた分・休場日（祝日・年末年始）・公開した直後に重ねて届いた分
+  # 手動の「Run workflow」はいつでも作り直す（light を付ければ開示だけ）
   check:
     runs-on: ubuntu-latest
     outputs:
-      skip: ${{ steps.check.outputs.skip }}
+      mode: ${{ steps.check.outputs.mode }}
+      kept: ${{ steps.check.outputs.kept }}
     steps:
       - uses: actions/checkout@v7
       - id: check
@@ -46,6 +56,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           CRON: ${{ github.event.schedule }}
           AUTO: ${{ inputs.auto }}
+          LIGHT: ${{ inputs.light }}
           BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # 実行が順番待ちの間に、前の実行が記録を更新していることがあるので、最新の main から読む
@@ -54,7 +65,7 @@ jobs:
 
   build:
     needs: check
-    if: needs.check.outputs.skip != 'true'
+    if: needs.check.outputs.mode != 'skip'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -70,10 +81,28 @@ jobs:
       - name: 回帰テスト
         run: python pipeline/tests/test_momentum.py
 
+      # 全体の更新（light でなければこちら。check の結果が読めないときも、作る側に倒す）
       - name: 株価の取得・計算・暗号化
+        id: full
+        if: needs.check.outputs.mode != 'light'
         env:
           MOMENTUM_PASSPHRASE: ${{ secrets.MOMENTUM_PASSPHRASE }}
-        run: python pipeline/build.py --out web/public/data
+        run: python pipeline/build.py --out web/public/data --keep pipeline/cache/kept.bin
+
+      # 開示だけの更新: 大引け後の全体の更新が残した取得結果（株価など。暗号化してある）を取り出し、
+      # 開示だけ取り直して作り直す。取り出せない・取り直せないときは失敗で終わり、公開しない（夕方のデータが残る）
+      - name: 大引け後の取得結果を取り出す
+        if: needs.check.outputs.mode == 'light'
+        uses: actions/cache/restore@v6
+        with:
+          path: pipeline/cache/kept.bin
+          key: ${{ needs.check.outputs.kept }}
+          fail-on-cache-miss: true
+      - name: 開示の取り直し・計算・暗号化
+        if: needs.check.outputs.mode == 'light'
+        env:
+          MOMENTUM_PASSPHRASE: ${{ secrets.MOMENTUM_PASSPHRASE }}
+        run: python pipeline/build.py --out web/public/data --light pipeline/cache/kept.bin
 
       - uses: actions/setup-node@v7
         with:
@@ -90,6 +119,17 @@ jobs:
         with:
           path: web/dist
 
+      # 大引け後の取得結果を Actions のキャッシュに残す（開示だけの更新で使い回す）。キャッシュは公開されないが、
+      # 中身は株価なので、画面のデータと同じ鍵で暗号化してある。7日間使われなければ GitHub が消す。
+      # 残せなくても公開は続ける（その日の開示だけの更新が、取り出せずに失敗で終わるだけ）
+      - name: 大引け後の取得結果を残す
+        if: steps.full.outputs.kept != ''
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: pipeline/cache/kept.bin
+          key: ${{ steps.full.outputs.kept }}
+
       # 公開リポジトリは60日間なにも変化が無いと、定時実行が自動で止められる。
       # 毎日の実行記録をコミットして、止まらないようにする（失敗しても公開は続ける）
       - name: 実行記録のコミット
@@ -98,7 +138,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pipeline/last_run.json
-          git commit -m "data: $(jq -r 'if .session == "am" then .as_of + " 前場" elif .session == "intraday" then .as_of + " 途中" else .as_of end' pipeline/last_run.json)" || exit 0
+          git commit -m "data: $(jq -r 'if .refreshed then .as_of + " 開示 " + (.refreshed.at | split(" ")[1]) elif .session == "am" then .as_of + " 前場" elif .session == "intraday" then .as_of + " 途中" else .as_of end' pipeline/last_run.json)" || exit 0
           git push
 
   deploy:

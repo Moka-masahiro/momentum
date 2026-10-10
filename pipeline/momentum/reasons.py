@@ -214,6 +214,11 @@ class Extras:
 
     disclosures: pd.DataFrame | None = None     # time, code, title, url
     disclosure_days: set = field(default_factory=set)   # 開示を取得できた暦日
+    disclosures_at: pd.Timestamp | None = None  # 開示を最後に取得した時刻（日本時間）
+    # 開示だけの更新（build.py --light）のとき: 株価と一緒に取得した時点（seen_at）で、すでにあった開示のキー
+    # （disclosure_keys）。ここに無い開示は、あとから取り直して見つかった「新着」。全体の更新では None（新着は無い）
+    seen: set | None = None
+    seen_at: pd.Timestamp | None = None
     short: pd.DataFrame | None = None           # code, holder, calc_date, ratio, prev_ratio
     flags: pd.DataFrame | None = None           # code, flags
     flags_date: str | None = None
@@ -227,7 +232,8 @@ class Extras:
 @dataclass
 class Reasons:
     labels: dict                  # (日付文字列, code) → (ラベル, 短い文言)。直近 WINDOW_DAYS 日
-    latest: pd.DataFrame          # index=code: why, why_text, idio, vr, std_ratio, disc, disc_text（最新日。一覧用）
+    latest: pd.DataFrame          # index=code: why, why_text, idio, vr, std_ratio, disc, disc_text,
+                                  # disc_new, disc_new_text（最新日。一覧用）
     detail: dict                  # code → 最新日の説明（銘柄詳細用）
     disclosures: dict             # code → 直近 LIST_DAYS 日の開示（新しい順）
     status: dict                  # 材料ごとの取得状況（設定画面・実行記録用）
@@ -321,8 +327,15 @@ def _sector_returns(R: np.ndarray, b: np.ndarray, sectors: pd.Series) -> tuple[n
     return market, S
 
 
-def _prepare(disc: pd.DataFrame | None, dates: pd.DatetimeIndex, codes: set) -> pd.DataFrame:
-    cols = ["time", "code", "title", "url", "category", "kind", "text", "day", "pending"]
+def disclosure_keys(disc: pd.DataFrame | None) -> list[tuple]:
+    """開示を見分けるキー (時刻, 銘柄, 表題)。行の順。"""
+    if disc is None or disc.empty:
+        return []
+    return list(zip(pd.to_datetime(disc["time"]).dt.strftime("%Y-%m-%d %H:%M:%S"), disc["code"], disc["title"]))
+
+
+def _prepare(disc: pd.DataFrame | None, dates: pd.DatetimeIndex, codes: set, seen: set | None = None) -> pd.DataFrame:
+    cols = ["time", "code", "title", "url", "category", "kind", "text", "day", "pending", "late"]
     if disc is None or disc.empty:
         return pd.DataFrame(columns=cols)
     d = disc[disc["code"].isin(codes)].drop_duplicates(["time", "code", "title"]).copy()
@@ -335,6 +348,8 @@ def _prepare(disc: pd.DataFrame | None, dates: pd.DatetimeIndex, codes: set) -> 
     d["text"] = [p[2] for p in parts]
     d["day"] = effective_day(d["time"], dates)
     d["pending"] = np.where(d["day"].isna(), "next", "")   # next = 次の取引日の材料 / pm = 後場の材料
+    # 新着 = 株価と一緒に取得したときには無く、あとから開示だけ取り直して見つかったもの
+    d["late"] = False if seen is None else [k not in seen for k in disclosure_keys(d)]
     return d[cols].sort_values("time").reset_index(drop=True)
 
 
@@ -410,7 +425,7 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
     valid = c.notna().to_numpy()
     prev_pos = pd.DataFrame(np.where(valid, np.arange(len(dates), dtype=float)[:, None], np.nan)).ffill().shift(1).to_numpy()
 
-    disc = _prepare(ex.disclosures, p.dates, set(codes))
+    disc = _prepare(ex.disclosures, p.dates, set(codes), ex.seen)
     if session == "am" and len(disc):
         late = (disc["day"] == dates[-1]) & (disc["time"] >= dates[-1] + AM_CLOSE)
         disc.loc[late, "day"] = pd.NaT
@@ -635,6 +650,13 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
             ahead.setdefault(item["code"], item)
     latest["disc"] = [ahead[cd]["category"] if cd in ahead else None for cd in codes]
     latest["disc_text"] = [ahead[cd]["text"] if cd in ahead else None for cd in codes]
+    # これからの材料のうち新着（あとから開示だけ取り直して見つかったもの）の先頭。無い銘柄は None
+    fresh: dict = {}
+    for item in feed:
+        if item["day"] is None and item.get("late"):
+            fresh.setdefault(item["code"], item)
+    latest["disc_new"] = [fresh[cd]["category"] if cd in fresh else None for cd in codes]
+    latest["disc_new_text"] = [fresh[cd]["text"] if cd in fresh else None for cd in codes]
 
     counts = pd.Series([v[0] for (d, _), v in labels.items() if d == day]).value_counts().to_dict()
     status = {
@@ -646,6 +668,9 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
             "latest": disc["time"].max().strftime("%Y-%m-%d %H:%M") if len(disc) else None,
             "days_failed": _days_failed(ex, now),
             "error": ex.errors.get("disclosures"),
+            # 開示を最後に取得した時刻と、新着の基準（株価と一緒に取得した時刻。開示だけの更新のときだけ）
+            "fetched": _minute(ex.disclosures_at),
+            "since": _minute(ex.seen_at) if ex.seen is not None else None,
         },
         "short": {"ok": ex.short is not None, "date": max((v["date"] for v in short.values()), default=None),
                   "error": ex.errors.get("short")},
@@ -669,7 +694,12 @@ def _item(x) -> dict:
         "url": x.url if isinstance(x.url, str) else None,
         "day": None if pd.isna(x.day) else x.day.strftime("%Y-%m-%d"),   # None = まだ来ていない取引日
         "pending": x.pending or None,     # next = 次の取引日の材料 / pm = 後場の材料（昼の実行だけ）
+        **({"late": True} if x.late else {}),   # 新着（開示だけの更新で見つかったもの）にだけ付ける
     }
+
+
+def _minute(t) -> str | None:
+    return None if t is None or pd.isna(t) else pd.Timestamp(t).strftime("%Y-%m-%d %H:%M")
 
 
 def _days_failed(ex: Extras, now: pd.Timestamp) -> int:

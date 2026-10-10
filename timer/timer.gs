@@ -3,7 +3,8 @@
  *
  * GitHub 自身の定時実行（schedule）は 2026-08-27 ごろから5〜7時間遅れて届くので、決まった時刻に
  * GitHub Actions の daily を workflow_dispatch（auto=true）で頼む役だけをここで持つ。
- * 作り直すかどうかは GitHub 側（pipeline/should_build.py）が決める。ここは時刻が来たら頼むだけ。
+ * 何をするか（全体を作り直す・開示だけ取り直す・何もしない）は GitHub 側（pipeline/should_build.py）が
+ * 届いた時刻で決める。ここは時刻が来たら頼むだけ。
  *
  * 準備（README の「外部のタイマー」の節）:
  *   1. スクリプト プロパティ GITHUB_TOKEN に、momentum リポジトリだけに絞った
@@ -14,7 +15,10 @@
 
 const REPO = 'Moka-masahiro/momentum';
 const WORKFLOW = 'daily.yml';
-const SLOTS = ['11:53', '17:17', '18:47'];  // 平日に頼む時刻（日本時間）。daily.yml の cron と同じ
+// 平日に頼む時刻（日本時間）。daily.yml の cron と同じ。
+//   11:53 前場の引け後・17:17 大引け後（全体の更新）、18:47 その予備と開示だけの更新、
+//   20:17・翌朝 08:37 開示だけの更新（夕方の更新のあとに出た開示を拾う。2026-10-10 に追加）
+const SLOTS = ['08:37', '11:53', '17:17', '18:47', '20:17'];
 const RETRY_MINUTES = 30;                   // 頼めなかったときは、この間は5分ごとにやり直す
 
 /** 5分ごとに動く。平日の頼む時刻を過ぎていて、その回をまだ頼んでいなければ頼む */

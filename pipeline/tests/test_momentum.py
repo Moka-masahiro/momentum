@@ -501,6 +501,135 @@ def test_should_build_skips_market_holidays():
     assert should_build.decide(at("2026-10-12 14:00"), "2026-10-09 17:25", manual=True)[0]   # 手動はいつでも
 
 
+def test_light_update_picks_up_disclosures_after_the_evening_build():
+    # 開示だけの更新: 夕方の更新（金曜 17:25）のあとに出た開示を、夜と翌朝に拾う。
+    # 2026-10-09（金）〜 10-13（火）。10/12（月）は祝日
+    from datetime import datetime
+    at = lambda s: datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=should_build.JST)  # noqa: E731
+    fri = {"built": "2026-10-09 17:25", "as_of": "2026-10-09", "session": "close", "kept": "kept-2026-10-09-17-25"}
+    mode = lambda now, last=fri: should_build.plan(at(now), last, manual=False)[0]  # noqa: E731
+    after = lambda t: {**fri, "refreshed": {"at": t}}  # noqa: E731
+    noon = {"built": "2026-10-09 12:01", "as_of": "2026-10-09", "session": "am"}
+    assert mode("2026-10-09 17:18", noon) == "full"                          # 夕方の全体の更新はこれまでどおり
+    assert mode("2026-10-09 17:30") == "skip"                                # 公開したばかり
+    assert mode("2026-10-09 18:48") == "light"                               # 予備の回: 大引けのデータがあれば開示だけ
+    assert mode("2026-10-09 18:52", after("2026-10-09 18:50")) == "skip"     # 重ねて届いた分
+    assert mode("2026-10-09 20:18", after("2026-10-09 18:50")) == "light"
+    assert mode("2026-10-10 01:57", after("2026-10-09 20:20")) == "light"    # 土曜の未明に遅れて届いた分: 金曜の夜の残り
+    assert mode("2026-10-10 03:10", after("2026-10-10 02:00")) == "skip"     # 金曜の分は取り直し済み（土日は開示が出ない）
+    assert mode("2026-10-12 08:38", after("2026-10-10 02:00")) == "skip"     # 祝日の朝
+    assert mode("2026-10-12 08:38", after("2026-10-09 20:20")) == "light"    # 金曜の夜の残りをまだ拾っていなければ拾う
+    assert mode("2026-10-13 01:30", after("2026-10-10 02:00")) == "skip"     # 休み明けの未明（8時より前は開示が出ない）
+    assert mode("2026-10-13 08:38", after("2026-10-10 02:00")) == "light"    # 休み明けの朝: 寄り付き前の開示
+    assert mode("2026-10-13 08:50", after("2026-10-13 08:41")) == "skip"
+    for now in ("2026-10-13 09:00", "2026-10-13 10:30", "2026-10-13 14:00", "2026-10-13 16:59"):
+        assert mode(now, after("2026-10-13 08:41")) == "skip", now           # 取引時間中は昼と夕方の更新に任せる
+    assert mode("2026-10-13 11:53", after("2026-10-13 08:41")) == "full"     # 昼の全体の更新はこれまでどおり
+    # 公開中のデータが直近の大引けのものでなければ、開示だけ取り直すことはしない（古いデータを新しく見せない）
+    am = {"built": "2026-10-13 12:01", "as_of": "2026-10-13", "session": "am"}
+    assert mode("2026-10-13 20:18", am) == "full"                            # 夕方の回が抜けていれば、全体の更新を試みる
+    assert mode("2026-10-14 08:38", am) == "skip"                            # 翌朝も前場のデータのままなら触らない
+    assert mode("2026-10-14 08:38", fri) == "skip"                           # 2取引日前のデータ
+    assert mode("2026-10-13 08:38", {"built": "2026-10-09 17:25"}) == "skip"  # いつのデータか分からない（古い形の記録）
+    assert mode("2026-10-13 08:38", {**fri, "refreshed": {"at": "壊れた値"}}) == "skip"   # 判定できなければ行わない
+    # 取得した結果を残していないデータ（この仕組みを入れる前の更新・材料を取得できなかった日）には行わない
+    unkept = {k: v for k, v in fri.items() if k != "kept"}
+    assert mode("2026-10-09 18:48", unkept) == "skip" and mode("2026-10-13 08:38", unkept) == "skip"
+    assert should_build.plan(at("2026-10-13 10:30"), fri, manual=True)[0] == "full"       # 手動はいつでも
+    assert should_build.plan(at("2026-10-13 10:30"), fri, manual=True, want_light=True)[0] == "light"
+    assert should_build.plan(at("2026-10-13 10:30"), unkept, manual=True, want_light=True)[0] == "error"
+    assert should_build.kept_key("2026-10-09 17:25") == "kept-2026-10-09-17-25"
+
+
+def test_kept_data_opens_only_with_the_same_key_and_format():
+    cfg = {"salt": "AAAAAAAAAAAAAAAAAAAAAA==", "iterations": 1000}
+    key = secure.derive_key("正しい合言葉です", cfg)
+    blob = build.pack_kept({"built": "2026-10-09 17:25", "session": "close"}, b"fetched", b"extras", key)
+    kept = build.open_kept(blob, key)
+    assert (kept["status"]["built"], kept["fetched"], kept["extras"]) == ("2026-10-09 17:25", b"fetched", b"extras")
+
+    def refused(blob, key) -> str:
+        try:
+            build.open_kept(blob, key)
+        except build.KeptError as e:
+            return str(e)
+        raise AssertionError("開けてしまった")
+
+    assert "合言葉" in refused(blob, secure.derive_key("違う合言葉です", cfg))
+    assert "合言葉" in refused(blob[:-1] + bytes([blob[-1] ^ 1]), key)      # 1ビットでも変わっていれば開かない
+    version, build.KEPT_VERSION = build.KEPT_VERSION, build.KEPT_VERSION + 1
+    try:
+        assert "形式" in refused(blob, key)                                  # 形式を変えたあとの古い保存結果
+    finally:
+        build.KEPT_VERSION = version
+
+
+def test_refresh_disclosures_refetches_since_the_last_fetch_and_marks_new_items():
+    # 金曜 17:22 に株価と一緒に取得した開示を、月曜の朝に取り直す（合成データの最終日 2026-08-28 は金曜）
+    p, base, disc, days, last = _reason_panel()
+    fri_1722 = last + pd.Timedelta(hours=17, minutes=22)
+    mon_0840 = last + pd.Timedelta(days=3, hours=8, minutes=40)
+    row = lambda t, code, title: {"time": t, "code": code, "title": title, "url": None}  # noqa: E731
+    friday = disc[disc["time"] >= last].to_dict("records")
+    late = [row(last + pd.Timedelta(hours=19), "1004", "通期業績予想の下方修正に関するお知らせ"),
+            row(last + pd.Timedelta(days=3, hours=8), "1005", "当社株式に対する公開買付けの開始に関するお知らせ")]
+    calls = []
+
+    def fake(answer, ok_days):
+        def fetch_disclosures(start, end):
+            calls.append((start, end))
+            return pd.DataFrame(answer, columns=["time", "code", "title", "url"]), set(ok_days)
+        return fetch_disclosures
+
+    since_fri = [d.date() for d in pd.date_range(last, last + pd.Timedelta(days=3))]
+    kept = lambda: rsn.Extras(disclosures=disc.copy(), disclosure_days=set(days), disclosures_at=fri_1722)  # noqa: E731
+    original = build.fetch.fetch_disclosures
+    try:
+        build.fetch.fetch_disclosures = fake(friday + late, since_fri)
+        ex = kept()
+        build.refresh_disclosures(ex, p.dates, mon_0840)
+        assert calls == [(last.date(), mon_0840.date())]                  # 前に取得した日から今日まで
+        assert len(ex.disclosures) == 5 and ex.disclosures_at == mon_0840 and ex.seen_at == fri_1722
+        assert set(since_fri) <= ex.disclosure_days
+        rs = rsn.compute(p, base, ex, mon_0840)
+        upcoming = {x["code"]: x for x in rs.feed if x["day"] is None}
+        assert set(upcoming) == {"1001", "1004", "1005"}
+        assert "late" not in upcoming["1001"] and upcoming["1004"]["late"] and upcoming["1005"]["late"]
+        # 一覧の行には、新着の分類と文言を別に持つ（1001 の引け後の決算短信は、前からあったので新着ではない）
+        assert (rs.latest.at["1004", "disc_new"], rs.latest.at["1004", "disc_new_text"]) == ("業績修正", "業績予想の下方修正")
+        assert rs.latest.at["1005", "disc_new"] == "TOB・M&A" and pd.isna(rs.latest.at["1001", "disc_new"])
+        assert rs.latest.at["1001", "disc"] == "決算"
+        st = rs.status["disclosures"]
+        assert (st["since"], st["fetched"]) == ("2026-08-28 17:22", "2026-08-31 08:40")
+        # その日の値動きの理由は、開示を取り直しても変わらない（引け後の開示は次の取引日の材料）
+        before = rsn.compute(p, base, kept(), fri_1722)
+        assert rs.latest["why"].to_dict() == before.latest["why"].to_dict()
+        assert before.status["disclosures"]["since"] is None and before.latest["disc_new"].isna().all()   # 全体の更新に新着は無い
+
+        def refused(answer, ok_days, ex) -> str:
+            build.fetch.fetch_disclosures = fake(answer, ok_days)
+            try:
+                build.refresh_disclosures(ex, p.dates, mon_0840)
+            except RuntimeError as e:
+                return str(e)
+            raise AssertionError("取り直せてしまった")
+
+        # 日付が変わった直後（土曜 00:10）に取得していたら、前の日（金曜）から取り直す
+        calls.clear()
+        build.fetch.fetch_disclosures = fake(friday + late, since_fri)
+        build.refresh_disclosures(rsn.Extras(disclosures=disc.copy(), disclosure_days=set(days),
+                                             disclosures_at=last + pd.Timedelta(days=1, minutes=10)), p.dates, mon_0840)
+        assert calls == [(last.date(), mon_0840.date())]
+
+        assert "取得できない日" in refused(friday + late, since_fri[:-1], kept())       # 月曜の分が取れない
+        many = [row(last + pd.Timedelta(hours=16, minutes=m), "1006", f"お知らせ{m}") for m in range(8)]
+        big = rsn.Extras(disclosures=pd.concat([disc, pd.DataFrame(many)], ignore_index=True),
+                         disclosure_days=set(days), disclosures_at=fri_1722)
+        assert "少なすぎます" in refused(late, since_fri, big)                           # 前にあった金曜の10件が消えている
+    finally:
+        build.fetch.fetch_disclosures = original
+
+
 def test_stale_close_data_is_not_published():
     # 取引日の大引け後なのに Yahoo が当日分を返さないと、前日のデータを「大引け後」として出してしまう
     from datetime import date, datetime
