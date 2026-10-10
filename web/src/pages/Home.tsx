@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, DiscChip, ErrorBox, Icon, Loading, RankBadge, RowMarks, Disclaimer, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
+import { Card, Delta, DiscChip, ErrorBox, Icon, Loading, RankBadge, RowMarks, Disclaimer, SessionBadge, SessionNote, THEME_WINDOW, ThemeBadges, ThemeChip, WHY_LABEL, WhyNote } from "../components/ui";
 import Spark from "../components/Spark";
 import { mdDate, mdTime, num, pct, slashDate, yen } from "../format";
 import { flag, go, setFlag } from "../router";
@@ -61,6 +61,7 @@ export default function Home({ onGuide }: { onGuide: () => void }) {
           {/* 登録があれば、自分の銘柄を最初に見せる（無いうちは下に案内だけ出す） */}
           {data.watchlist.length > 0 && <WatchCard rows={data.watchlist} />}
           <MarketCard data={data} />
+          <ThemesCard themes={data.themes} />
           <MoversCard data={data} />
           <UpcomingCard data={data} />
           <RankingCard rows={data.ranking} universe={data.universe} />
@@ -174,6 +175,52 @@ function MarketCard({ data }: { data: HomeData }) {
   );
 }
 
+/** そろって上げているテーマ。売買代金も膨らんでいるテーマがあれば、最初の1文で名前を挙げる */
+function ThemesCard({ themes }: { themes: HomeData["themes"] }) {
+  if (themes === undefined) return null; // テーマの無い古いデータ
+  const flow = (themes ?? []).filter((t) => t.flow);
+  return (
+    <Card icon="tag" title="上げているテーマ" link="一覧を見る" onLink={() => go("themes")} guide="themes-home"
+      sub="そろって市場より上げているテーマ。売買代金も大きく膨らんでいれば「資金集中？」">
+      {themes === null ? (
+        <p className="note">この日はテーマを作れませんでした。</p>
+      ) : themes.length === 0 ? (
+        <p className="note">いま、そろって上げているテーマはありません。</p>
+      ) : (
+        <>
+          {flow.length > 0 && (
+            <p className="text-[13.5px] font-semibold leading-snug mb-1">
+              {flow.map((t) => `「${t.name}」`).join("")}に資金が集まっているかもしれません。
+            </p>
+          )}
+          {themes.slice(0, 4).map((t) => {
+            const w = THEME_WINDOW[t.state];
+            return (
+              <button key={t.name} className="list-row" style={{ gridTemplateColumns: "1fr auto" }} onClick={() => go(`themes/${encodeURIComponent(t.name)}`)}>
+                <span className="list-name">
+                  <b>{t.name}</b>
+                  <small className="list-sub wrap">
+                    <ThemeBadges state={t.state} flow={t.flow} />
+                    <span>{t.n}銘柄の{num(t.up)}%が市場を上回る · 売買代金 {num(t.tr, t.tr != null && t.tr < 10 ? 1 : 0)}倍</span>
+                  </small>
+                  <span className="list-title">{t.lead.filter(Boolean).join("、")} ほか</span>
+                </span>
+                <span className="text-right leading-tight">
+                  <span className="block text-[15px] font-bold"><Delta v={t.rel[w]} /></span>
+                  <span className="block text-[10.5px] t-3">{w}日・市場比</span>
+                </span>
+              </button>
+            );
+          })}
+          <p className="note mt-2">
+            テーマと銘柄の対応は手作りの表で、網羅ではありません。数字は流動性のある銘柄の中央値で、売買代金は普段（前250営業日の中央値）の何倍か。
+          </p>
+        </>
+      )}
+    </Card>
+  );
+}
+
 const MOVER_ORDER: Why[] = ["news", "supply", "unknown", "market"];
 
 function MoversCard({ data }: { data: HomeData }) {
@@ -206,7 +253,7 @@ function MoversCard({ data }: { data: HomeData }) {
               <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr auto" }} onClick={() => go(`stock/${r.code}`)}>
                 <span className="list-name">
                   <b>{r.name}</b>
-                  <small className="list-sub"><WhyNote row={r} /></small>
+                  <small className="list-sub"><ThemeChip row={r} /><WhyNote row={r} /></small>
                 </span>
                 <span className="text-right text-[13px] font-semibold"><Delta v={r.chg1} /></span>
               </button>
@@ -281,6 +328,7 @@ function RankingCard({ rows, universe }: { rows: StockRow[]; universe: number })
             <b>{r.name}</b>
             <small className="list-sub">
               <span>{r.code} · 1か月 <span className={r.chg20 != null && r.chg20 >= 0 ? "t-up" : "t-down"}>{pct(r.chg20)}</span></span>
+              <ThemeChip row={r} />
               <WhyNote row={r} text={false} />
             </small>
           </span>

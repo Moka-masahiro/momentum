@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { deltaClass, num, pct, signed } from "../format";
-import type { Rank, Session, StockRow, Why } from "../types";
+import type { Rank, Session, StockRow, ThemeState, Why } from "../types";
 
 /* ---------- アイコン（線画。currentColor で色を継ぐ） ---------- */
 
@@ -47,6 +47,8 @@ export function Icon({ name, size = 20 }: { name: string; size?: number }) {
       return <svg {...s}><path {...P} d="M3 12h4l2.5-6 5 12 2.5-6h4" /></svg>;
     case "doc":
       return <svg {...s}><path {...P} d="M7 3h7l4 4v14H7zM14 3v4h4M10 12h5M10 16h5" /></svg>;
+    case "tag":
+      return <svg {...s}><path {...P} d="M3.5 12.5V4.5h8l9 9-8 8z" /><circle {...P} cx="8" cy="9" r="1.4" /></svg>;
     case "scale":
       return <svg {...s}><path {...P} d="M12 4v16M7.5 20h9M5 7h14M5 7l-2.5 6a2.6 2.6 0 0 0 5 0zM19 7l-2.5 6a2.6 2.6 0 0 0 5 0z" /></svg>;
     default:
@@ -117,20 +119,46 @@ export function DiscChip({ category, prefix = "" }: { category: string | null | 
   return <span className={`why ${SUPPLY_CATEGORIES.has(category) ? "why-supply" : "why-news"}`}>{prefix}{category}</span>;
 }
 
-type Marked = Pick<StockRow, "why" | "disc" | "std_ratio" | "signals_today">;
+/* ---------- テーマ ---------- */
+
+/** 状態を決めた期間（営業日） */
+export const THEME_WINDOW: Record<ThemeState, string> = { surge: "5", rise: "20", hold: "60" };
+export const THEME_STATE: Record<ThemeState, string> = { surge: "5日で急騰", rise: "20日で上昇", hold: "60日で上昇" };
+
+/**
+ * そろって上げているテーマの名前（一覧の行に添える）。売買代金も膨らんでいる（資金が集まっているかもしれない）
+ * テーマは塗りつぶす
+ */
+export function ThemeChip({ row }: { row: Pick<StockRow, "theme" | "theme_flow"> }) {
+  return row.theme ? <span className={`why ${row.theme_flow ? "why-flow" : "why-theme"}`}>{row.theme}</span> : null;
+}
+
+/** テーマの状態の印。売買代金も膨らんでいれば「資金集中？」を足す（かもしれない、の意味で ? を付ける） */
+export function ThemeBadges({ state, flow }: { state: ThemeState | null; flow: boolean }) {
+  if (!state) return null;
+  return (
+    <>
+      {flow && <span className="why why-flow">資金集中？</span>}
+      <span className="why why-theme">{THEME_STATE[state]}</span>
+    </>
+  );
+}
+
+type Marked = Pick<StockRow, "why" | "disc" | "std_ratio" | "signals_today" | "theme" | "theme_flow">;
 
 export function hasMarks(r: Marked): boolean {
-  return !!(r.why || r.disc || (r.std_ratio != null && r.std_ratio < 1) || r.signals_today?.length);
+  return !!(r.why || r.disc || r.theme || (r.std_ratio != null && r.std_ratio < 1) || r.signals_today?.length);
 }
 
 /**
- * 一覧の行に並べる印（ウォッチリスト用）: きょうの値動きの理由・これからの材料（引け後の開示）・
- * 制度信用の売り長・当日のシグナル。何も無い銘柄は何も出さない
+ * 一覧の行に並べる印（ウォッチリスト用）: きょうの値動きの理由・そろって上げているテーマ・
+ * これからの材料（引け後の開示）・制度信用の売り長・当日のシグナル。何も無い銘柄は何も出さない
  */
 export function RowMarks({ row }: { row: Marked }) {
   return (
     <>
       <WhyChip why={row.why} />
+      <ThemeChip row={row} />
       <DiscChip category={row.disc} prefix="開示: " />
       {row.std_ratio != null && row.std_ratio < 1 && <span className="why why-supply">売り長 {num(row.std_ratio, 2)}倍</span>}
       {!!row.signals_today?.length && <span className="why why-market">⚡ シグナル</span>}

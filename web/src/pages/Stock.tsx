@@ -3,7 +3,7 @@ import { api, invalidate, paths, useData } from "../data";
 import { setWatched } from "../watch";
 import Radar from "../components/Radar";
 import StockChart from "../components/StockChart";
-import { Card, Delta, Disclaimer, ErrorBox, Icon, Loading, RankBadge, SessionBadge, SessionNote, Sheet, WhyChip } from "../components/ui";
+import { Card, Delta, Disclaimer, ErrorBox, Icon, Loading, RankBadge, SessionBadge, SessionNote, Sheet, THEME_STATE, WhyChip } from "../components/ui";
 import { mdDate, mdTime, num, pct, shares, signed, yen, yenLarge } from "../format";
 import { METRICS, RANK_TEXT, type MetricInfo } from "../metrics";
 import { back, go, rememberStock } from "../router";
@@ -126,6 +126,17 @@ function Summary({ d }: { d: StockDetail }) {
         <p className="note mt-2 t-warn">最新日は売買が成立していません。{mdDate(d.last_date)} 時点の値です。</p>
       )}
       <SessionNote session={d.session} className="mt-2" />
+      {!!d.themes?.length && (
+        <div className="flex flex-wrap items-center gap-1.5 mt-3" data-guide="stock-themes">
+          <span className="note">テーマ</span>
+          {d.themes.map((t) => (
+            <button key={t.name} className={`why ${t.flow ? "why-flow" : "why-theme"} !text-[12px] !py-1.5 !px-2`}
+              onClick={() => go(`themes/${encodeURIComponent(t.name)}`)}>
+              {t.name}{t.state ? `（${THEME_STATE[t.state]}${t.flow ? "・資金集中？" : ""}）` : ""}
+            </button>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }

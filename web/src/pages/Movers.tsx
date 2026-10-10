@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, Delta, ErrorBox, Icon, Loading, ScopeChecks, Seg, SessionBadge, SessionNote, WHY_LABEL, WhyNote } from "../components/ui";
+import { Card, Delta, ErrorBox, Icon, Loading, ScopeChecks, Seg, SessionBadge, SessionNote, ThemeChip, WHY_LABEL, WhyNote } from "../components/ui";
 import { num, slashDate } from "../format";
 import { back, go } from "../router";
 import type { MoversResponse, Why } from "../types";
@@ -62,7 +62,7 @@ export default function Movers() {
               <button key={r.code} className="list-row" style={{ gridTemplateColumns: "1fr 58px 44px" }} onClick={() => go(`stock/${r.code}`)}>
                 <span className="list-name">
                   <b>{watched.has(r.code) && <span className="t-gold">★ </span>}{r.name}</b>
-                  <small className="list-sub"><span>{r.code}</span><WhyNote row={r} /></small>
+                  <small className="list-sub"><span>{r.code}</span><ThemeChip row={r} /><WhyNote row={r} /></small>
                 </span>
                 <span className="text-right text-[12.5px] font-semibold"><Delta v={r.chg1} /></span>
                 <span className="text-right text-[11.5px] t-2 num">{r.vr != null ? `${num(r.vr, 1)}倍` : "—"}</span>
@@ -82,13 +82,16 @@ export default function Movers() {
             </p>
             <ul className="mt-2 space-y-2 text-[13px] leading-snug">
               <li><WhyNote row={{ why: "market" }} /> 業種全体が同じ向きに大きく動き、この銘柄だけの動きは目立たない。
-                または開示は無いが、同じ業種の他の銘柄もそろって同じ向きに大きく動いた（テーマ・連れ高）</li>
+                または開示は無いが、同じテーマの銘柄（手作りの表）や、同じ業種の他の銘柄がそろって同じ向きに動いた（テーマ買い・連れ高）</li>
               <li><WhyNote row={{ why: "news" }} /> 前の取引日の引け（15:30）から当日の引けまでに、会社の適時開示がある</li>
               <li><WhyNote row={{ why: "supply" }} /> 増資・自社株買いなど株の需給に関わる開示がある。または開示は無いが、出来高が急増したのに値動きは小さい（指数の入れ替え・大口の売買）、信用取引の規制・日々公表の対象、機関の空売りが値動きと同じ向きに大きく増減、信用残が重く値動きを強める向き（下げた日の買い残・上げた日の売り残が上位1割の重さ）、権利落ち日の下げ</li>
               <li><WhyNote row={{ why: "unknown" }} /> どれにも当たらない</li>
             </ul>
             <p className="note mt-3">
-              ニュースは会社の適時開示だけで、新聞報道・アナリストの格付け・テーマ買いは拾えません（無料で自動取得してよい入手先が無いため）。
+              ニュースは会社の適時開示だけで、新聞報道・アナリストの格付けは拾えません（無料で自動取得してよい入手先が無いため）。
+              テーマ買いは、手作りの表にあるテーマの銘柄がそろって動いた日だけ分かります。
+              ピンク色の印は、そろって上げているテーマの名前です（値動きの理由とは別に、テーマの一覧から付けています）。
+              塗りつぶした印は、売買代金も大きく膨らんでいて、資金が集まっているかもしれないテーマです。
               会社が「一部報道について」を出したときだけ、報道が理由だとわかります。需給の手がかりは状況証拠で、原因の証明ではありません。
               開示を取得できなかった日を含むときは判定しません。
             </p>

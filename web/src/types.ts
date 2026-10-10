@@ -47,6 +47,60 @@ export interface StockRow {
   disc_text?: string | null;  // その短い文言
   disc_new?: string | null;       // これからの材料のうち新着（開示だけの更新で見つかったもの）の分類。無ければ null
   disc_new_text?: string | null;  // その短い文言
+  theme?: string | null;          // そろって上げているテーマに入っていれば、そのテーマ名（古いデータには無い）
+  theme_flow?: boolean | null;    // そのテーマは売買代金も膨らんでいる（資金が集まっているかもしれない）
+}
+
+/**
+ * テーマ（pipeline/momentum/themes.py）。テーマと銘柄の対応は手作りの表。
+ * state は、そろって上げている期間（surge = 5日 / rise = 20日だけ / hold = 60日だけ）。
+ * flow は、その期間に売買代金も市場全体より大きく膨らんでいるか（資金が集まっているかもしれない）
+ */
+export type ThemeState = "surge" | "rise" | "hold";
+
+export interface ThemeWindow {
+  rel: number | null;   // 銘柄の騰落率と市場の中央値との差の、テーマ内の中央値（%）
+  up: number | null;    // 市場の中央値を上回った銘柄の割合（%）
+  z: number | null;     // 騰落率がほかの銘柄より高い方に偏っている度合い
+  tr: number | null;    // 売買代金が普段（前250営業日の中央値）の何倍か（テーマ内の中央値）
+  trx: number | null;   // tr ÷ 市場全体の同じ倍率
+  hot: boolean;         // そろって上げている
+  flow: boolean;        // 売買代金も膨らんでいる
+}
+
+export interface Theme {
+  name: string;
+  desc: string;
+  codes: string[];
+  n: number;            // 流動性のある銘柄の数（集計に使った数）
+  w: Record<string, ThemeWindow>;   // 期間（"1"・"5"・"20"・"60" 営業日）ごとの値
+  state: ThemeState | null;
+  flow: boolean;
+  lead: string[];       // 5日の上げが大きい銘柄のコード
+}
+
+/** ホームに出す、そろって上げているテーマ */
+export interface HomeTheme {
+  name: string;
+  state: ThemeState;
+  flow: boolean;
+  n: number;
+  rel: Record<string, number | null>;
+  up: number | null;    // 状態を決めた期間の値
+  tr: number | null;
+  lead: (string | null)[];   // 上げの大きい銘柄の名前
+}
+
+export type ThemeMember = StockRow & { tr5: number | null; tr20: number | null };   // 売買代金が普段の何倍か
+
+export interface ThemesResponse {
+  as_of: string;
+  session: Session;
+  ok: boolean;                              // テーマを作れたか
+  market: Record<string, number | null>;    // 期間ごとの市場の中央値（%）
+  big: Record<string, number | null>;       // 期間ごとの、上位1割の線（市場比 %）
+  themes: (Theme & { items: ThemeMember[] })[];
+  loose: StockRow[];                        // どのテーマの表にも無い、5日で大きく上げた銘柄
 }
 
 export interface Disclosure {
@@ -262,6 +316,7 @@ export interface Home {
   signals: { total: number; liquid: number; by_type: SignalTypeCount[] };
   reasons?: ReasonStatus | null;    // 値動きの理由の材料の取得状況（古いデータには無い）
   margin?: (MarginSummary & { date: string | null }) | null;   // 全銘柄を合計した制度信用倍率（古いデータには無い）
+  themes?: HomeTheme[] | null;      // そろって上げているテーマ（null = 作れなかった。古いデータには無い）
   watchlist: StockRow[];
   movers: StockRow[];               // 流動性のある銘柄のうち、理由の付いたもの（画面側で作る）
   upcoming?: StockRow[];            // これからの材料のある銘柄（画面側で作る。古いデータでは undefined）
@@ -395,6 +450,7 @@ export interface StockDetail extends StockRow {
   session?: Session;
   watched: boolean;
   reason?: Reason | null;          // 古いデータには無い
+  themes?: { name: string; state: ThemeState | null; flow: boolean }[];   // この銘柄が入っているテーマ
   disclosures?: Disclosure[];      // 直近30日の開示（新しい順）
   metrics: Metrics;
   radar: { key: string; label: string; value: number | null }[];

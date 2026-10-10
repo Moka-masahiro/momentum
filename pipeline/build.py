@@ -48,7 +48,7 @@ import fetch  # noqa: E402
 import market_days  # noqa: E402
 import secure  # noqa: E402
 import should_build  # noqa: E402
-from momentum import data, export, reasons  # noqa: E402
+from momentum import data, export, reasons, themes  # noqa: E402
 from momentum.compute import compute  # noqa: E402
 
 logger = logging.getLogger("build")
@@ -205,6 +205,7 @@ def main() -> int:
     panel = data.make_panel(bars, master)
     st = compute(panel, index)
     st.session = session
+    st.themes, theme_moves = _themes(st)
     now = pd.Timestamp(datetime.now(JST).replace(tzinfo=None))
     extras_blob = None
     if kept:
@@ -212,13 +213,13 @@ def main() -> int:
         try:
             ex = pickle.loads(kept["extras"])
             refresh_disclosures(ex, st.panel.dates, now)
-            st.reasons = reasons.compute(st.panel, st.base, ex, now, session=session)
+            st.reasons = reasons.compute(st.panel, st.base, ex, now, session=session, theme_moves=theme_moves)
         except Exception:   # この更新は開示のためだけなので、取り直せなければ公開しない（夕方のデータが残る）
             logger.exception("開示を取り直せませんでした。公開しません")
             return 1
         logger.info("reasons: %s", json.dumps(reasons.brief(st.reasons.status), ensure_ascii=False))
     else:
-        st.reasons, extras_blob = _reasons(args, st, now, keeping)
+        st.reasons, extras_blob = _reasons(args, st, now, keeping, theme_moves)
 
     out = Path(args.out)
     if out.exists():
@@ -288,7 +289,24 @@ def _output(name: str, value: str) -> None:
             f.write(f"{name}={value}\n")
 
 
-def _reasons(args, st, now: pd.Timestamp, keeping: bool = False):
+def _themes(st):
+    """テーマごとの値動き（画面用）と、日ごとの「テーマがそろって動いた」印（値動きの理由用）。
+    手作りの表から作る補助の情報なので、作れなくても株価と指標の公開は止めない。"""
+    try:
+        table = themes.load()
+        result = themes.compute(st.panel, st.liquid, st.session, table)
+        moves = themes.day_labels(st.panel.close.ffill(), st.liquid, table, reasons.WINDOW_DAYS)
+        if result["missing"]:
+            logger.warning("themes: %d codes in themes.txt have no bars: %s", len(result["missing"]), " ".join(result["missing"]))
+        hot = [f"{t['name']}:{t['state']}{'$' if t['flow'] else ''}" for t in result["themes"] if t["state"]]
+        logger.info("themes: %d themes, hot: %s", len(result["themes"]), " / ".join(hot) or "-")
+        return result, moves
+    except Exception:
+        logger.exception("テーマを作れませんでした（テーマなしで公開します）")
+        return None, None
+
+
+def _reasons(args, st, now: pd.Timestamp, keeping: bool = False, theme_moves: dict | None = None):
     """値動きの理由。材料が取れなくても、株価と指標の公開は止めない。
 
     戻り値は (理由, 取得した材料の pickle)。pickle は --keep 用で、計算に渡す前の状態を残す。
@@ -300,7 +318,7 @@ def _reasons(args, st, now: pd.Timestamp, keeping: bool = False):
         return None, None
     snapshot = pickle.dumps(ex, protocol=pickle.HIGHEST_PROTOCOL) if keeping else None
     try:
-        rs = reasons.compute(st.panel, st.base, ex, now, session=st.session)
+        rs = reasons.compute(st.panel, st.base, ex, now, session=st.session, theme_moves=theme_moves)
         logger.info("reasons: %s", json.dumps(reasons.brief(rs.status), ensure_ascii=False))
         return rs, snapshot
     except Exception:

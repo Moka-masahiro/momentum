@@ -13,6 +13,7 @@ import Ranking from "./pages/Ranking";
 import Settings from "./pages/Settings";
 import Signals from "./pages/Signals";
 import Stock from "./pages/Stock";
+import Themes from "./pages/Themes";
 import Verify from "./pages/Verify";
 import Watchlist from "./pages/Watchlist";
 import { go, useRoute } from "./router";
@@ -116,6 +117,9 @@ function Main() {
       break;
     case "disclosures":
       view = <Disclosures key={arg ?? "all"} initial={arg} />;
+      break;
+    case "themes":
+      view = <Themes key={arg ?? "list"} name={arg} />;
       break;
     case "verify":
       view = <Verify />;

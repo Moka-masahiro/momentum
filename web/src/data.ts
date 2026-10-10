@@ -29,6 +29,8 @@ import type {
   StdMargin,
   StockDetail,
   StockRow,
+  Theme,
+  ThemesResponse,
   VerifyResponse,
   Why,
 } from "./types";
@@ -327,6 +329,16 @@ interface FeedDoc {
   rows: unknown[][];
 }
 
+interface ThemesDoc {
+  as_of: string;
+  session?: Session;
+  ok: boolean;
+  market?: Record<string, number | null>;
+  big?: Record<string, number | null>;
+  themes: Theme[];
+  turnover?: Record<string, [number | null, number | null]>;   // 銘柄ごとの、売買代金が普段の何倍か（5日・20日）
+}
+
 interface MarginDoc {
   as_of: string;
   date: string | null;
@@ -358,6 +370,7 @@ export const paths = {
   signals: (date?: string) => `signals|${date ?? ""}`,
   movers: "movers",
   disclosures: "disclosures",
+  themes: "themes",
   margin: "margin",
   market: "market",
   verify: "verify",
@@ -429,6 +442,32 @@ export const api = {
       as_of: doc.as_of, session: doc.session ?? "close", ok: doc.ok, latest: doc.latest,
       fetched: doc.fetched ?? null, since: doc.since ?? null,
       upcoming: [...tabs.upcoming.values()], today: [...tabs.today.values()],
+    };
+  },
+
+  /** テーマごとの値動きと、その銘柄（最新値から足す）。どのテーマの表にも無い急騰銘柄も付ける */
+  async themes(): Promise<ThemesResponse> {
+    const [doc, l] = await Promise.all([load<ThemesDoc>("themes"), latest()]);
+    const tr = doc.turnover ?? {};
+    const listed = new Set<string>();
+    const themes = doc.themes.map((t) => {
+      t.codes.forEach((c) => listed.add(c));
+      const items = t.codes.flatMap((c) => {
+        const r = l.byCode.get(c);
+        return r ? [{ ...r, tr5: tr[c]?.[0] ?? null, tr20: tr[c]?.[1] ?? null }] : [];
+      });
+      return { ...t, items };
+    });
+    // 表に無い銘柄のうち、5日の上げが「上位1割の線」の2倍以上のもの（新しいテーマの手がかり）
+    const line = doc.big?.["5"];
+    const market = doc.market?.["5"] ?? 0;
+    const loose = line == null ? [] : l.rows
+      .filter((r) => r.liquid && !listed.has(r.code) && r.chg5 != null && r.chg5 - market >= line * 2)
+      .sort((a, b) => (b.chg5 ?? 0) - (a.chg5 ?? 0))
+      .slice(0, 15);
+    return {
+      as_of: doc.as_of, session: doc.session ?? "close", ok: doc.ok,
+      market: doc.market ?? {}, big: doc.big ?? {}, themes, loose,
     };
   },
 

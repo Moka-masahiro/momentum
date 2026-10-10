@@ -16,7 +16,7 @@ import fetch  # noqa: E402
 import market_days  # noqa: E402
 import secure  # noqa: E402
 import should_build  # noqa: E402
-from momentum import data, export, indicators as ind, reasons as rsn, signals as sig  # noqa: E402
+from momentum import data, export, indicators as ind, reasons as rsn, signals as sig, themes  # noqa: E402
 
 
 def _frames(closes: list[float], flat_days: set[int] = frozenset()):
@@ -732,6 +732,98 @@ def test_short_clue_uses_only_recent_reports():
 def test_export_finite_drops_nan():
     assert export._finite({"a": [1.0, float("nan")], "b": {"c": float("inf")}, "d": "x"}) == \
         {"a": [1.0, None], "b": {"c": None}, "d": "x"}
+
+
+# --- テーマ -------------------------------------------------------------------------
+
+def test_theme_table_format():
+    table = themes.parse("""
+# 先頭のメモ
+1234 最初のテーマより前の行は読まない
+[テーマA]
+説明: 説明の文
+1000 あ社   # メモ
+1001
+[テーマB]
+130A い社
+""")
+    assert [(t.name, t.desc, list(t.members)) for t in table] == [("テーマA", "説明の文", ["1000", "1001"]), ("テーマB", "", ["130A"])]
+    assert table[0].members["1000"] == "あ社"
+    for bad in ("[A]\n12 コードが短い", "[A]\n1000 x\n[A]\n1001 y"):     # 読めない行・同じテーマが2回
+        try:
+            themes.parse(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"読めてしまった: {bad!r}")
+
+
+def test_theme_table_in_the_repo_is_readable():
+    table = themes.load()
+    assert len(table) >= 20 and all(len(t.members) >= 4 for t in table)
+    assert {"サイバーセキュリティ", "自動運転"} <= {t.name for t in table}
+
+
+def _theme_panel():
+    """80銘柄・330営業日の合成データ。テーマAの8銘柄は、最後の5日だけ毎日+4%多く上げて売買代金が10倍。
+    テーマBの8銘柄はふつう。3銘柄だけのテーマは判定しない。"""
+    rng = np.random.default_rng(5)
+    idx = pd.bdate_range("2025-06-02", periods=330)
+    codes = [f"{2000 + i}" for i in range(80)]
+    rets = rng.normal(0, 0.01, size=(330, 80))
+    rets[-5:, :8] += 0.04
+    close = pd.DataFrame(1000 * np.exp(np.cumsum(rets, axis=0)), index=idx, columns=codes)
+    turnover = pd.DataFrame(1e8 * rng.uniform(0.8, 1.2, size=(330, 80)), index=idx, columns=codes)
+    turnover.iloc[-5:, :8] *= 10
+    liquid = pd.DataFrame(True, index=idx, columns=codes)
+    table = [themes.Theme("A", "", dict.fromkeys(codes[:8], "")), themes.Theme("B", "", dict.fromkeys(codes[8:16], "")),
+             themes.Theme("小さい", "", dict.fromkeys(codes[16:19], ""))]
+    return close, turnover, liquid, table
+
+
+def test_theme_rising_together_with_turnover_is_flagged():
+    close, turnover, liquid, table = _theme_panel()
+    a, b, small = themes.stats_at(close, turnover, liquid.iloc[-1], table)["themes"]
+    w = a["w"]["5"]
+    assert a["state"] == "surge" and a["flow"] and w["rel"] > 15 and w["up"] == 100 and 8 < w["tr"] < 12 and w["z"] > 4
+    assert b["state"] is None and not b["flow"]
+    assert small["state"] is None and small["w"]["5"]["z"] is None      # 銘柄が少ないテーマは判定しない
+    # 値上がりだけで売買代金が増えていなければ「そろって上昇」まで（資金が集まっているとは出さない）
+    flat = pd.DataFrame(1e8, index=turnover.index, columns=turnover.columns)
+    quiet = themes.stats_at(close, flat, liquid.iloc[-1], table)["themes"][0]
+    assert quiet["state"] == "surge" and not quiet["flow"] and quiet["w"]["5"]["tr"] == 1.0
+    # 5日前の時点では、まだ何も起きていない
+    before = themes.stats_at(close, turnover, liquid.iloc[-6], table, i=len(close) - 6)["themes"][0]
+    assert before["state"] is None
+    # 昼の実行は、最新日の売買代金が前場の分（1日の約半分）なので割り戻す
+    half = turnover.copy()
+    half.iloc[-1] *= themes.AM_SHARE
+    am = themes.stats_at(close, half, liquid.iloc[-1], table, session="am")["themes"][0]["w"]["1"]["tr"]
+    assert abs(am - a["w"]["1"]["tr"]) < 0.01
+    # 画面用の一覧は、そろって上げているテーマを先に並べ、上げの大きい銘柄を付ける
+    panel = data.Panel(close, close, close, close, turnover / close, pd.DataFrame(index=close.columns))
+    result = themes.compute(panel, liquid, table=table)
+    assert [t["name"] for t in result["themes"]][0] == "A" and len(result["themes"][0]["lead"]) == 3
+    assert themes.hot_tag(result) == dict.fromkeys(close.columns[:8], ("A", True))
+    assert result["turnover"]["2000"][0] > 8 and result["missing"] == []
+
+
+def test_theme_moving_together_explains_a_move_without_disclosure():
+    # テーマの銘柄がその日にそろって動いたら、開示の無い目立った動きに「地合い（テーマ）」と付ける
+    close, turnover, liquid, table = _theme_panel()
+    moves = themes.day_labels(close, liquid, table, days=3)
+    last = close.index[-1].strftime("%Y-%m-%d")
+    assert moves[(last, "2000")] == (1, "テーマ「A」がそろって上昇") and (last, "2010") not in moves
+    p, base, disc, days, last = _reason_panel()
+    day = last.strftime("%Y-%m-%d")
+    ex = lambda: rsn.Extras(disclosures=disc, disclosure_days=days)  # noqa: E731
+    up = {(day, "1001"): (1, "テーマ「T」がそろって上昇"), (day, "1000"): (1, "テーマ「T」がそろって上昇")}
+    rs = rsn.compute(p, base, ex(), last + pd.Timedelta(hours=17), theme_moves=up)
+    assert (rs.latest.at["1001", "why"], rs.latest.at["1001", "why_text"]) == ("market", "テーマ「T」がそろって上昇")
+    assert rs.detail["1001"]["clues"][0]["key"] == "theme"
+    assert rs.latest.at["1000", "why"] == "news"                      # 会社の開示があれば、そちらを理由にする
+    down = {(day, "1001"): (-1, "テーマ「T」がそろって下落")}          # テーマは下げたのに、この銘柄は上げた
+    assert rsn.compute(p, base, ex(), last + pd.Timedelta(hours=17), theme_moves=down).latest.at["1001", "why"] == "unknown"
 
 
 if __name__ == "__main__":

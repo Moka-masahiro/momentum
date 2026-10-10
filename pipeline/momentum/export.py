@@ -10,6 +10,7 @@
     verify    検証（IC・ランク別・十分位・シグナル実績・分割補正の記録）
     margin    制度信用倍率（制度信用の買い残÷売り残）の一覧と、全銘柄の合計
     disclosures  開示の一覧（定例を除く）: これからの材料と、最新日に効いた開示
+    themes    テーマごとの値動きと売買代金（そろって上げているテーマ・資金が集まっているかもしれないテーマ）
     stocks/<code>  1銘柄の詳細（チャート・指標・5角形・シグナル履歴・テクニカル整理・
                    値動きの理由・直近30日の開示）
 """
@@ -19,7 +20,7 @@ from typing import Iterator
 
 import pandas as pd
 
-from . import data, indicators as ind, report, signals as sig
+from . import data, indicators as ind, report, signals as sig, themes as thm
 from .compute import State
 
 CHART_DAYS = 250           # 詳細画面のチャートの本数（約1年）
@@ -30,7 +31,7 @@ LATEST_COLUMNS = (
     "code", "name", "segment", "sector33", "close", "chg1", "chg5", "chg20", "chg60",
     "score", "rank", "score_d1", "score_d5", "score_d20", "position", "turnover20",
     "liquid", "base", "traded_today", "last_date", "signals_today", "t",
-    "why", "why_text", "idio", "vr", "disc", "disc_text", "std_ratio", "disc_new", "disc_new_text",
+    "why", "why_text", "idio", "vr", "disc", "disc_text", "std_ratio", "disc_new", "disc_new_text", "theme", "theme_flow",
 )
 # 開示の一覧の列（reasons.compute の feed）。pending が next / pm のものは、まだ値動きに効いていない。
 # late は新着（株価を取得したあとで、開示だけ取り直して見つかったもの）
@@ -61,7 +62,7 @@ def _series(s: pd.Series, nd: int = 1) -> dict:
     return {"dates": [d.strftime("%Y-%m-%d") for d in s.index], "values": [_r(x, nd) for x in s]}
 
 
-def row(code: str, r: pd.Series) -> dict:
+def row(code: str, r: pd.Series, theme: tuple | None = None) -> dict:
     sigs = r.get("signals_today")
     return {
         "code": code,
@@ -94,6 +95,9 @@ def row(code: str, r: pd.Series) -> dict:
         # これからの材料のうち新着（開示だけの更新で見つかったもの）の分類と短い文言。無ければ None
         "disc_new": _str(r.get("disc_new")),
         "disc_new_text": _str(r.get("disc_new_text")),
+        # そろって上げているテーマに入っていれば、そのテーマ名と、売買代金も膨らんでいるか（themes.py。無ければ None）
+        "theme": theme[0] if theme else None,
+        "theme_flow": True if theme and theme[1] else None,
     }
 
 
@@ -101,7 +105,8 @@ def documents(st: State) -> Iterator[tuple[str, dict]]:
     """(ファイル名, 中身) を順に返す。"""
     built_at = datetime.now(JST).strftime("%Y-%m-%d %H:%M")
     latest = st.latest if st.reasons is None else st.latest.join(st.reasons.latest)
-    rows = {code: row(code, r) for code, r in latest.iterrows()}
+    tag = thm.hot_tag(st.themes) if st.themes else {}
+    rows = {code: row(code, r, tag.get(code)) for code, r in latest.iterrows()}
     market = _market(st)
     margin = _margin(st)
     yield "home", _home(st, rows, market, built_at, margin)
@@ -109,6 +114,7 @@ def documents(st: State) -> Iterator[tuple[str, dict]]:
     yield "market", {"as_of": st.as_of, **market}
     yield "margin", margin
     yield "disclosures", _disclosures(st)
+    yield "themes", _themes(st)
     yield "signals", _signals(st)
     yield "verify", {"as_of": st.as_of, "computed_at": built_at, "signal_stats": st.stats,
                      "signal_defs": signal_defs(), "adjustments": st.panel.adjustments, **st.validation}
@@ -116,8 +122,12 @@ def documents(st: State) -> Iterator[tuple[str, dict]]:
     pct = {k: _percentiles(st.frames[k].iloc[-1], base_last) for k in ("sr", "power")}
     ranks = {x["rank"]: x for x in st.validation["ranks"]}
     by_code = dict(tuple(st.events.groupby("code"))) if len(st.events) else {}
+    themes_of: dict = {}        # コード → その銘柄が入っているテーマ（名前・状態）
+    for t in (st.themes["themes"] if st.themes else []):
+        for code in t["codes"]:
+            themes_of.setdefault(code, []).append({"name": t["name"], "state": t["state"], "flow": t["flow"]})
     for code in st.panel.codes:
-        yield f"stocks/{code}", stock(st, code, rows[code], pct, ranks, by_code.get(code))
+        yield f"stocks/{code}", stock(st, code, rows[code], pct, ranks, by_code.get(code), themes_of.get(code, []))
 
 
 def signal_defs() -> list[dict]:
@@ -155,6 +165,8 @@ def _home(st: State, rows: dict, market: dict, built_at: str, margin: dict) -> d
         "reasons": _finite(st.reasons.status) if st.reasons else None,
         # 全銘柄を合計した制度信用倍率と、売り長の銘柄数（None = 信用残を取れなかった）
         "margin": {"date": margin["date"], **margin["summary"]} if margin["summary"] else None,
+        # そろって上げているテーマ（売買代金も膨らんでいるものが先。None = テーマを作れなかった）
+        "themes": _home_themes(st, rows),
         "signals": {
             "total": int(len(ev_today)),
             "liquid": int(ev_today["liquid"].sum()) if len(ev_today) else 0,
@@ -164,6 +176,29 @@ def _home(st: State, rows: dict, market: dict, built_at: str, margin: dict) -> d
                         for s in sig.SIGNALS],
         },
     }
+
+
+def _home_themes(st: State, rows: dict, limit: int = 6) -> list[dict] | None:
+    """ホームに出す、そろって上げているテーマ。状態を決めた期間（5日・20日・60日）の値と、上げの大きい銘柄の名前。"""
+    if not st.themes:
+        return None
+    window = dict(thm.STATES)
+    out = []
+    for t in st.themes["themes"]:
+        if not t["state"]:
+            continue
+        w = t["w"][window[t["state"]]]
+        out.append({"name": t["name"], "state": t["state"], "flow": t["flow"], "n": t["n"],
+                    "rel": {k: v["rel"] for k, v in t["w"].items()}, "up": w["up"], "tr": w["tr"],
+                    "lead": [rows[c]["name"] for c in t["lead"] if c in rows]})
+    return _finite(out[:limit])
+
+
+def _themes(st: State) -> dict:
+    """テーマごとの値動きと売買代金（themes.compute）。作れなかった日は ok が False で themes が空。"""
+    if not st.themes:
+        return {"as_of": st.as_of, "session": st.session, "ok": False, "themes": []}
+    return _finite({"as_of": st.as_of, "ok": True, **st.themes})
 
 
 def _verify_summary(st: State) -> dict:
@@ -360,7 +395,7 @@ def _percentiles(values: pd.Series, mask: pd.Series) -> pd.Series:
 
 
 def stock(st: State, code: str, r: dict, pct: dict, ranks: dict,
-          events: pd.DataFrame | None = None) -> dict:
+          events: pd.DataFrame | None = None, themes: list | None = None) -> dict:
     """1銘柄の詳細。events はその銘柄のシグナル（全銘柄分を毎回なめると遅いので渡してもらう）。"""
     p = st.panel
     lr = st.latest.loc[code]
@@ -410,6 +445,8 @@ def stock(st: State, code: str, r: dict, pct: dict, ranks: dict,
         # 値動きの理由（最新日）と直近30日の開示。理由を作れなかった日は None / []
         "reason": _finite(st.reasons.detail.get(code)) if st.reasons else None,
         "disclosures": _finite(st.reasons.disclosures.get(code, [])) if st.reasons else [],
+        # この銘柄が入っているテーマ（手作りの表。状態は themes.py）
+        "themes": themes or [],
     }
 
 

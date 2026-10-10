@@ -12,6 +12,7 @@
 2. ニュース … 前に売買が成立した日の引け（15:30）から当日の引けまでに、会社の開示がある。
                増資・自社株買いのように株の需給に関わる開示だけなら「需給」にする
                （実例: 清水建設 2026-09-25 の −6% は転換社債の発行）
+   地合い   … 開示は無いが、同じテーマ（pipeline/themes.txt の表）の銘柄がそろって同じ向きに動いた（テーマ買い）
    地合い   … 開示は無いが、同じ業種の他の銘柄もそろって同じ向きに大きく動いた（テーマ・連れ高）
 3. 需給     … 開示は無いが、需給の手がかりがある
                ・出来高が急増したのに値動きは小さい（指数の入れ替え・大口の売買で起きやすい形）
@@ -397,8 +398,10 @@ def _short_summary(short: pd.DataFrame | None, since: pd.Timestamp | None = None
     return out
 
 
-def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str = "close") -> Reasons:
+def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str = "close",
+            theme_moves: dict | None = None) -> Reasons:
     """p は data.Panel、base は「終値100円以上で売買のあった日」の表、now は日本時間の現在時刻。
+    theme_moves は、テーマがそろって動いた日の印（themes.day_labels。{(日付, コード): (向き, 文言)}）。
 
     session が am（前場の引け後の実行）のときは、最新日の出来高を前場の分として見て、
     11:30 以降の開示はその日の前場の理由にしない（後場の材料として一覧に出す）。
@@ -534,6 +537,14 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
                 "text": f"同じ業種（{name}）の他の{others}銘柄も、普段の2倍以上そろって{'上げた' if up else '下げた'}"
                         "（業種の一部がまとめて動いた日。テーマ・連れ高の可能性）"}
 
+    def theme(i: int, j: int) -> dict | None:
+        """この銘柄の入っているテーマが、その日にそろって同じ向きへ動いたか（テーマ買い・連れ高）。"""
+        hit = (theme_moves or {}).get((dates[i].strftime("%Y-%m-%d"), codes[j]))
+        if not hit or np.sign(R[i, j]) != hit[0]:
+            return None
+        return {"key": "theme", "short": hit[1],
+                "text": f"{hit[1]}（同じテーマの銘柄が、市場全体と比べてまとまって動いた日。テーマ買い・連れ高の可能性）"}
+
     def judge(i: int, j: int) -> tuple[str | None, str | None, list[dict], bool]:
         """(ラベル, 短い文言, 手がかり, 判定できたか)"""
         if not covered(i, j):
@@ -546,6 +557,9 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
             supply = items[items["kind"] == "supply"]
             if len(supply):
                 return "supply", _headline(supply), [], True
+        t = theme(i, j)
+        if t:
+            return "market", t["short"], [t], True
         g = group(i, j)
         if g:
             return "market", g["short"], [g], True

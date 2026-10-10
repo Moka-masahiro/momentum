@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
-import { Card, ErrorBox, Icon, Loading, RankBadge, Seg, WhyNote } from "../components/ui";
+import { Card, ErrorBox, Icon, Loading, RankBadge, Seg, ThemeChip, WhyNote } from "../components/ui";
 import { num, pct } from "../format";
 import { back, go } from "../router";
 import type { RankingResponse } from "../types";
@@ -47,6 +47,7 @@ export default function Ranking() {
                   <b>{r.name}</b>
                   <small className="list-sub">
                     <span>{r.code} · {r.segment ?? "—"}{r.signals_today.length ? " · ⚡" : ""}</span>
+                    <ThemeChip row={r} />
                     <WhyNote row={r} text={false} />
                   </small>
                 </span>
