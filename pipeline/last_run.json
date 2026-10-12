@@ -18,5 +18,11 @@
   "margin": true,
   "unchecked": 0
  },
- "kept": "kept-2026-10-10-17-35"
+ "kept": "kept-2026-10-10-17-35",
+ "refreshed": {
+  "at": "2026-10-13 08:40",
+  "latest": "2026-10-09 19:30",
+  "new": 0,
+  "elapsed_sec": 75.8
+ }
 }
