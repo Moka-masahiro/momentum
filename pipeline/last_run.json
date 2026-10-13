@@ -1,21 +1,22 @@
 {
- "built": "2026-10-13 12:02",
+ "built": "2026-10-13 17:25",
  "as_of": "2026-10-13",
- "session": "am",
+ "session": "close",
  "stocks_listed": 3707,
  "stocks_fetched": 3707,
  "stocks_failed": 0,
  "adjustments": 3,
  "files": 3715,
  "size_mb": 31.0,
- "elapsed_sec": 493.8,
+ "elapsed_sec": 384.3,
  "reasons": {
-  "disclosures": 3804,
+  "disclosures": 3994,
   "disclosure_days_failed": 0,
   "short": true,
   "flags": true,
   "premium": true,
   "margin": true,
   "unchecked": 0
- }
+ },
+ "kept": "kept-2026-10-13-17-25"
 }
