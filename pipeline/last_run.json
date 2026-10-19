@@ -1,28 +1,21 @@
 {
- "built": "2026-10-16 17:27",
- "as_of": "2026-10-16",
- "session": "close",
+ "built": "2026-10-19 12:01",
+ "as_of": "2026-10-19",
+ "session": "am",
  "stocks_listed": 3707,
  "stocks_fetched": 3707,
  "stocks_failed": 0,
- "adjustments": 3,
+ "adjustments": 2,
  "files": 3715,
- "size_mb": 31.1,
- "elapsed_sec": 503.1,
+ "size_mb": 31.0,
+ "elapsed_sec": 438.8,
  "reasons": {
-  "disclosures": 4320,
+  "disclosures": 4032,
   "disclosure_days_failed": 0,
   "short": true,
   "flags": true,
   "premium": true,
   "margin": true,
   "unchecked": 0
- },
- "kept": "kept-2026-10-16-17-27",
- "refreshed": {
-  "at": "2026-10-19 08:40",
-  "latest": "2026-10-19 08:00",
-  "new": 12,
-  "elapsed_sec": 79.9
  }
 }
