@@ -135,7 +135,9 @@ jobs:
       # 公開リポジトリは60日間なにも変化が無いと、定時実行が自動で止められる。
       # 毎日の実行記録をコミットして、止まらないようにする（失敗しても公開は続ける）。
       # 信用残の履歴に書き足した日のファイルも一緒にコミットする。コミットできなかった日は、
-      # JPX に残っている5営業日のうちに、次の大引け後の回が取り直して埋める
+      # JPX に残っている5営業日のうちに、次の大引け後の回が取り直して埋める。
+      # push は5回までやり直す（2026-11-04 #225 で GitHub 側が「Internal Server Error」で push を断り、
+      # 信用残の履歴5日分のコミットが届かなかった。間を置いて取り込み直してから、もう一度送る）
       - name: 実行記録のコミット
         continue-on-error: true
         run: |
@@ -144,7 +146,14 @@ jobs:
           git add pipeline/last_run.json
           if [ -d pipeline/margin_history ]; then git add pipeline/margin_history; fi
           git commit -m "data: $(jq -r 'if .refreshed then .as_of + " 開示 " + (.refreshed.at | split(" ")[1]) elif .session == "am" then .as_of + " 前場" elif .session == "intraday" then .as_of + " 途中" else .as_of end' pipeline/last_run.json)" || exit 0
-          git push
+          for i in 1 2 3 4 5; do
+            if git push; then exit 0; fi
+            echo "::warning::push に失敗しました（${i}回目）。$((i * 20))秒おいて取り込み直し、もう一度送ります"
+            sleep $((i * 20))
+            git pull --rebase origin "$GITHUB_REF_NAME" || { git rebase --abort || true; }
+          done
+          echo "::error::push を5回とも断られました（信用残の履歴は、次の大引け後の回が JPX から取り直して埋めます）"
+          exit 1
 
   deploy:
     needs: build
