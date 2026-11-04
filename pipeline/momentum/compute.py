@@ -41,6 +41,7 @@ class State:
     session: str = "close"                # close = 大引け後 / am = 前場の引け後（当日は途中経過）/ intraday
     prices_at: str | None = None          # 株価を取得した更新の時刻。開示だけの更新（build.py --light）では、作った時刻より前
     themes: dict | None = None            # テーマごとの値動きと売買代金（themes.compute。作れなければ None）
+    margin_history: dict = field(default_factory=dict)   # 信用残の履歴 {申込日: 表（index=code）}（build.py が入れる）
 
     @property
     def as_of(self) -> str:

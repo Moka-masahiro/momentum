@@ -59,6 +59,12 @@ export function mdDate(s: string | null | undefined): string {
   return `${Number(m)}/${Number(d)}`;
 }
 
+/** 履歴の長さ（申込日の数）。短いうちは短いと分かるように、日数と「約◯週」をそのまま出す */
+export function histSpan(days: number, first: string | null | undefined): string {
+  const weeks = Math.floor(days / 5);
+  return `${days}日分${weeks >= 1 ? `（約${weeks}週）` : ""}${first ? `・${mdDate(first)}から` : ""}`;
+}
+
 export function slashDate(s: string | null | undefined): string {
   return s ? s.replace(/-/g, "/") : "";
 }

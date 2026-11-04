@@ -176,6 +176,24 @@ export interface StdMargin {
   sell_days: number | null;
   premium?: number | null;      // 逆日歩（1株・1日あたりの円。付いていなければ null）
   premium_max?: number | null;  // その上限（最高料率）
+  trend?: (number | null)[] | null;   // 直近の制度信用倍率の推移（MarginHist.trend_dates の順。売り残の無い日は null）
+}
+
+/** 信用残の履歴（pipeline/margin_history.py。2026-11 から大引け後の更新でためている） */
+export interface MarginHist {
+  days: number;                 // 履歴のある申込日の数（最大250）
+  first: string;                // 最も古い申込日
+  trend_dates: string[];        // 一覧の各行の trend の日付（直近20日分まで）
+  total: { date: string; ratio: number | null; short: number; rated: number; stocks: number }[];   // 全銘柄の合計の推移
+}
+
+/** 1銘柄の信用残の推移（株数。載っていない日は null） */
+export interface StockMarginHist {
+  dates: string[];
+  buy: (number | null)[];
+  sell: (number | null)[];
+  std_buy: (number | null)[];
+  std_sell: (number | null)[];
 }
 
 /** 全銘柄を合計した制度信用倍率（残高の合計どうしの比。ETF・REIT は対象外）と、売り長の銘柄数 */
@@ -195,6 +213,7 @@ export interface MarginResponse {
   as_of: string;
   date: string | null;        // 信用残の申込日（公表は次の営業日の16時ごろ）
   summary: MarginSummary | null;   // null = 信用残を取れなかった
+  hist: MarginHist | null;         // null = 履歴が無い（古いデータ）
   items: MarginRow[];
 }
 
@@ -451,6 +470,7 @@ export interface StockDetail extends StockRow {
   watched: boolean;
   reason?: Reason | null;          // 古いデータには無い
   themes?: { name: string; state: ThemeState | null; flow: boolean }[];   // この銘柄が入っているテーマ
+  margin_hist?: StockMarginHist | null;   // 信用残の推移（古いデータには無い）
   disclosures?: Disclosure[];      // 直近30日の開示（新しい順）
   metrics: Metrics;
   radar: { key: string; label: string; value: number | null }[];

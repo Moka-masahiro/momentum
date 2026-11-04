@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { api, paths, useData } from "../data";
+import Spark from "../components/Spark";
 import { Card, ErrorBox, Icon, Loading, RankBadge, ScopeChecks, Seg } from "../components/ui";
-import { mdDate, num, shares } from "../format";
+import { histSpan, mdDate, num, shares } from "../format";
 import { back, go } from "../router";
 import type { MarginResponse, MarginRow } from "../types";
 import { watchlist } from "../watch";
@@ -26,6 +27,17 @@ function Premium({ m }: { m: MarginRow["m"] }) {
     ? <span className="why why-supply">逆日歩 {num(m.premium, 2)}円/日（上限の{num(share)}%）</span>
     : <span>逆日歩 {num(m.premium, 2)}円/日</span>;
 }
+/**
+ * 推移線の縦の範囲。行ごとに最小〜最大へ広げると、0.04→0.05倍のようなわずかな変化まで大きな上下に見えるので、
+ * 範囲は少なくとも中央の値の±10%にする
+ */
+function trendDomain(values: (number | null)[]): [number, number] | undefined {
+  const v = values.filter((x): x is number => x != null);
+  if (v.length < 2) return undefined;
+  const lo = Math.min(...v), hi = Math.max(...v), mid = (lo + hi) / 2, half = Math.max((hi - lo) / 2, mid * 0.1);
+  return [mid - half, mid + half];
+}
+
 /** 倍率。売り残がわずかだと数百倍になるので、大きいほど小数を減らす */
 const times = (v: number | null) => num(v, v == null || v < 10 ? 2 : v < 100 ? 1 : 0);
 
@@ -51,6 +63,8 @@ export default function Margin() {
       && (watchOnly ? watched.has(r.code) : (!liquidOnly || r.liquid) && days(r) >= Number(size)))
     .sort((a, b) => (low ? a.m.ratio! - b.m.ratio! : b.m.ratio! - a.m.ratio!) || days(b) - days(a));
   const s = data?.summary;
+  const h = data?.hist ?? null;
+  const total = h?.total.filter((x) => x.ratio != null) ?? [];
   const reset = () => setLimit(50);
 
   return (
@@ -79,7 +93,7 @@ export default function Margin() {
               <Seg value={size} onChange={(v) => { setSize(v); reset(); }} options={SIZE} />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-3">
-              <span className="note">{mdDate(data.date)} 申込み分 · 該当 {num(items.length)} 銘柄</span>
+              <span className="note">{mdDate(data.date)} 申込み分 · 該当 {num(items.length)} 銘柄{h ? ` · 履歴 ${histSpan(h.days, h.first)}` : ""}</span>
               <ScopeChecks hasWatch={watched.size > 0} watchOnly={watchOnly} onWatch={(v) => { setWatchOnly(v); reset(); }}
                 liquidOnly={liquidOnly} onLiquid={(v) => { setLiquidOnly(v); reset(); }} />
             </div>
@@ -102,6 +116,11 @@ export default function Margin() {
                 <span className="text-right leading-tight">
                   <span className="block text-[16px] font-bold num">{times(r.m.ratio)}<span className="text-[11px] t-2 font-semibold">倍</span></span>
                   <span className="block text-[10.5px] t-3 num">前日 {times(r.m.ratio_prev)}</span>
+                  {h && r.m.trend && (
+                    <span className="block mt-0.5 ml-auto" style={{ width: 62 }}>
+                      <Spark series={{ dates: h.trend_dates, values: r.m.trend }} width={62} height={16} domain={trendDomain(r.m.trend)} />
+                    </span>
+                  )}
                 </span>
                 <span className="text-center"><RankBadge rank={r.rank} /></span>
               </button>
@@ -128,6 +147,24 @@ export default function Margin() {
             <p className="note mt-2">
               買い残 {oku(s.buy)} ÷ 売り残 {oku(s.sell)}（信用残を読めた {num(s.stocks)} 銘柄。ETF・REIT は含まない）。
             </p>
+            {h && (
+              <div className="mt-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-[12px] t-2 font-semibold">推移</span>
+                  <span className="note !text-[11px]">履歴 {histSpan(h.days, h.first)}</span>
+                </div>
+                {total.length >= 2 ? (
+                  <>
+                    <Spark series={{ dates: total.map((x) => x.date), values: total.map((x) => x.ratio) }} width={300} height={48} domain={trendDomain(total.map((x) => x.ratio))} />
+                    <p className="note !text-[11px]">
+                      {mdDate(total[0].date)} {num(total[0].ratio, 2)}倍・売り長 {num(total[0].short)} 銘柄 → {mdDate(total[total.length - 1].date)} {num(total[total.length - 1].ratio, 2)}倍・売り長 {num(total[total.length - 1].short)} 銘柄
+                    </p>
+                  </>
+                ) : (
+                  <p className="note">履歴がまだ1日分なので、推移は大引け後の更新ごとにたまっていきます。</p>
+                )}
+              </div>
+            )}
           </Card>
 
           <Card title="見かた">
@@ -142,7 +179,8 @@ export default function Margin() {
             </ul>
             <p className="note mt-3">
               出どころは JPX「銘柄別信用取引残高」。申込日の次の営業日に公表されるので、株価より1営業日（昼の更新では2営業日）前の残高です。
-              <b>倍率の低い・高い銘柄がその後どう動いたかは、このアプリでは検証していません</b>（JPX が毎日公表するようになったのが2026年9月28日で、まだ履歴が無いため）。
+              <b>倍率の低い・高い銘柄がその後どう動いたかは、このアプリでは検証していません</b>（JPX が毎日公表するようになったのが2026年9月28日で、JPX には直近5営業日分しか置かれないため）。
+              履歴は2026年11月からこのアプリで毎日残していて{h ? `、いまは${histSpan(h.days, h.first)}` : ""}です。検証には数か月分が要ります。
             </p>
           </Card>
         </div>

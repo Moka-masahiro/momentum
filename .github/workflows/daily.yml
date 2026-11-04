@@ -81,13 +81,15 @@ jobs:
       - name: 回帰テスト
         run: python pipeline/tests/test_momentum.py
 
-      # 全体の更新（light でなければこちら。check の結果が読めないときも、作る側に倒す）
+      # 全体の更新（light でなければこちら。check の結果が読めないときも、作る側に倒す）。
+      # --record: 大引け後の回なら、信用残の履歴（pipeline/margin_history/。暗号化）に書き足す。
+      # JPX に残っている5営業日分のうち、まだ無い日も取って埋める。昼の回は読むだけ（build.py が判断する）
       - name: 株価の取得・計算・暗号化
         id: full
         if: needs.check.outputs.mode != 'light'
         env:
           MOMENTUM_PASSPHRASE: ${{ secrets.MOMENTUM_PASSPHRASE }}
-        run: python pipeline/build.py --out web/public/data --keep pipeline/cache/kept.bin
+        run: python pipeline/build.py --out web/public/data --keep pipeline/cache/kept.bin --record
 
       # 開示だけの更新: 大引け後の全体の更新が残した取得結果（株価など。暗号化してある）を取り出し、
       # 開示だけ取り直して作り直す。取り出せない・取り直せないときは失敗で終わり、公開しない（夕方のデータが残る）
@@ -131,13 +133,16 @@ jobs:
           key: ${{ steps.full.outputs.kept }}
 
       # 公開リポジトリは60日間なにも変化が無いと、定時実行が自動で止められる。
-      # 毎日の実行記録をコミットして、止まらないようにする（失敗しても公開は続ける）
+      # 毎日の実行記録をコミットして、止まらないようにする（失敗しても公開は続ける）。
+      # 信用残の履歴に書き足した日のファイルも一緒にコミットする。コミットできなかった日は、
+      # JPX に残っている5営業日のうちに、次の大引け後の回が取り直して埋める
       - name: 実行記録のコミット
         continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pipeline/last_run.json
+          if [ -d pipeline/margin_history ]; then git add pipeline/margin_history; fi
           git commit -m "data: $(jq -r 'if .refreshed then .as_of + " 開示 " + (.refreshed.at | split(" ")[1]) elif .session == "am" then .as_of + " 前場" elif .session == "intraday" then .as_of + " 途中" else .as_of end' pipeline/last_run.json)" || exit 0
           git push
 

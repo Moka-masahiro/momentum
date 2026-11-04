@@ -16,6 +16,7 @@ import type {
   DisclosuresResponse,
   FeedItem,
   Home,
+  MarginHist,
   MarginResponse,
   MarginSummary,
   MarketResponse,
@@ -343,6 +344,7 @@ interface MarginDoc {
   as_of: string;
   date: string | null;
   summary: MarginSummary | null;
+  hist?: MarginHist | null;
   columns: string[];
   rows: unknown[][];
 }
@@ -480,7 +482,7 @@ export const api = {
       const r = l.byCode.get(o.code as string);
       return r ? [{ ...r, m: o as unknown as StdMargin }] : [];
     });
-    return { as_of: doc.as_of, date: doc.date, summary: doc.summary, items };
+    return { as_of: doc.as_of, date: doc.date, summary: doc.summary, hist: doc.hist ?? null, items };
   },
 
   market: () => load<MarketResponse>("market"),

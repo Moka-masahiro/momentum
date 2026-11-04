@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import build  # noqa: E402
 import fetch  # noqa: E402
+import margin_history  # noqa: E402
 import market_days  # noqa: E402
 import secure  # noqa: E402
 import should_build  # noqa: E402
@@ -824,6 +825,145 @@ def test_theme_moving_together_explains_a_move_without_disclosure():
     assert rs.latest.at["1000", "why"] == "news"                      # 会社の開示があれば、そちらを理由にする
     down = {(day, "1001"): (-1, "テーマ「T」がそろって下落")}          # テーマは下げたのに、この銘柄は上げた
     assert rsn.compute(p, base, ex(), last + pd.Timedelta(hours=17), theme_moves=down).latest.at["1001", "why"] == "unknown"
+
+
+def _margin_day(n: int = 3000, sell: int = 100, buy: int = 300, extra: dict | None = None) -> pd.DataFrame:
+    """信用残の1日分（fetch.parse_margin_lines と同じ列）。n 行（3,000 行に満たない日は残さない）。"""
+    rows = [{"code": f"{1000 + i}", "sell": sell, "sell_chg": 0, "sell_ratio": 0.01, "buy": buy, "buy_chg": None,
+             "buy_ratio": 0.03, "std_sell": sell, "std_sell_chg": 0, "std_buy": buy, "std_buy_chg": 0, "loan": True}
+            for i in range(n)]
+    df = pd.DataFrame(rows)
+    for code, vals in (extra or {}).items():
+        for k, v in vals.items():
+            df.loc[df["code"] == code, k] = v
+    return df
+
+
+def test_margin_history_is_written_once_per_day_and_read_back():
+    import tempfile
+    key = secure.derive_key("test-passphrase", {"salt": "AAAAAAAAAAAAAAAAAAAAAA==", "iterations": 1000})
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp)
+        day = _margin_day(extra={"1000": {"loan": False, "std_sell": 0}})
+        assert margin_history.save(folder, "2026-11-02", day, key, "u")
+        before = (folder / "2026-11-02.bin").read_bytes()
+        # 同じ申込日は二度書かない（あとから違う中身が来ても、最初の記録を残す）
+        assert not margin_history.save(folder, "2026-11-02", _margin_day(buy=999), key)
+        assert (folder / "2026-11-02.bin").read_bytes() == before
+        # 行が少なすぎる日（形式が変わった・読み損ねた）は残さない
+        try:
+            margin_history.save(folder, "2026-10-30", _margin_day(n=10), key)
+            raise AssertionError("少ない行の日を残した")
+        except ValueError:
+            pass
+        assert margin_history.days(folder) == ["2026-11-02"]
+        h = margin_history.load(folder, key)
+        got = h["2026-11-02"]
+        assert len(got) == 3000 and got.at["1001", "std_buy"] == 300 and got.at["1000", "loan"] == False  # noqa: E712
+        assert pd.isna(got.at["1001", "buy_chg"]) and got.at["1001", "sell_ratio"] == 0.01
+        # 別の鍵（合言葉を変えた）で書いたファイルは読めないので飛ばす。公開は止めない
+        other = secure.derive_key("another-passphrase", {"salt": "AAAAAAAAAAAAAAAAAAAAAA==", "iterations": 1000})
+        margin_history.save(folder, "2026-10-29", _margin_day(), other)
+        assert list(margin_history.load(folder, key)) == ["2026-11-02"]
+        # 合言葉を変えるときは暗号化し直す。古い鍵で開けないファイルが混ざっていたら、どれも書き換えない
+        try:
+            margin_history.reseal(folder, key, other)
+            raise AssertionError("開けないファイルがあるのに書き換えた")
+        except Exception as e:
+            assert not isinstance(e, AssertionError)
+        assert list(margin_history.load(folder, key)) == ["2026-11-02"]
+        (folder / "2026-10-29.bin").unlink()
+        assert margin_history.reseal(folder, key, other) == 1
+        assert list(margin_history.load(folder, key)) == [] and list(margin_history.load(folder, other)) == ["2026-11-02"]
+
+
+def test_margin_history_fills_the_days_jpx_still_has():
+    # JPX には直近5営業日分の PDF がある。まだ無い日だけ取って埋め、取れなかった日は書かない
+    import tempfile
+    key = secure.derive_key("test-passphrase", {"salt": "AAAAAAAAAAAAAAAAAAAAAA==", "iterations": 1000})
+    base = "https://www.jpx.co.jp/x/"
+    links = [base + f"{d}_mtall.pdf" for d in ("20261102", "20261030", "20261029", "20261028", "20261027")]
+    calls = []
+
+    def fake_pdf(url, timeout=120):
+        calls.append(url)
+        day = fetch._file_date(url)
+        if day == "2026-10-28":
+            raise RuntimeError("404")
+        if day == "2026-10-27":
+            return _margin_day(), "2026-10-26"          # 中身の日付が合わない
+        return _margin_day(), day
+
+    orig = (margin_history.fetch.margin_links, margin_history.fetch.fetch_margin_pdf)
+    try:
+        margin_history.fetch.margin_links = lambda timeout=60: links
+        margin_history.fetch.fetch_margin_pdf = fake_pdf
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            margin_history.save(folder, "2026-10-29", _margin_day(), key)        # 前に残した日
+            rec = margin_history.record(folder, key, _margin_day(), "2026-11-02")   # その回に取得した日
+            assert rec["saved"] == ["2026-10-30", "2026-11-02"]
+            assert set(rec["failed"]) == {"2026-10-28", "2026-10-27"}
+            assert (rec["days"], rec["first"], rec["last"]) == (3, "2026-10-29", "2026-11-02")
+            # その回の分と、前に残した日は取り直さない
+            assert [fetch._file_date(u) for u in calls] == ["2026-10-30", "2026-10-28", "2026-10-27"]
+            calls.clear()
+            again = margin_history.record(folder, key, _margin_day(), "2026-11-02")
+            assert again["saved"] == [] and [fetch._file_date(u) for u in calls] == ["2026-10-28", "2026-10-27"]
+            assert margin_history.days(folder) == ["2026-10-29", "2026-10-30", "2026-11-02"]
+            # JPX のページが読めなくても、その回の分は残る
+            margin_history.fetch.margin_links = lambda timeout=60: (_ for _ in ()).throw(RuntimeError("down"))
+            rec = margin_history.record(folder, key, _margin_day(), "2026-11-04")
+            assert rec["saved"] == ["2026-11-04"] and "list" in rec["failed"]
+    finally:
+        margin_history.fetch.margin_links, margin_history.fetch.fetch_margin_pdf = orig
+
+
+def test_margin_history_is_not_written_unless_recording():
+    # 開示だけの更新・昼の更新（record=False）は読むだけ。最新日はその回の取得分から足す
+    import tempfile
+    from types import SimpleNamespace
+    key = secure.derive_key("test-passphrase", {"salt": "AAAAAAAAAAAAAAAAAAAAAA==", "iterations": 1000})
+    with tempfile.TemporaryDirectory() as tmp:
+        margin_history.save(Path(tmp), "2026-10-30", _margin_day(buy=200), key)
+        args = SimpleNamespace(history=tmp)
+        ex = SimpleNamespace(margin=_margin_day(), margin_date="2026-11-02")
+        out = build._margin_history(args, key, ex, record=False)
+        assert margin_history.days(Path(tmp)) == ["2026-10-30"] and out["record"] is None
+        assert list(out["series"]) == ["2026-10-30", "2026-11-02"]
+        assert out["series"]["2026-11-02"].at["1000", "buy"] == 300            # その回の分（index は code）
+        # 材料を取れなかった回でも、残っている履歴は出す
+        assert list(build._margin_history(args, key, None, record=False)["series"]) == ["2026-10-30"]
+
+
+def test_margin_history_for_the_screens():
+    # 一覧の推移線と銘柄詳細の推移。点が1つでも壊れず、載っていない日・売り残が無い日は None
+    day1 = _margin_day(n=3, extra={"1001": {"std_sell": 0}}).set_index("code")
+    day2 = _margin_day(n=4, sell=200, extra={"1001": {"std_sell": 50}}).set_index("code")   # 1003 は2日目から
+    one = export.margin_wide({"2026-10-30": day1}, ["1000", "1001", "1003", "9999"])
+    assert one["dates"] == ["2026-10-30"]
+    assert export.stock_margin_hist(one, "1000") == {"dates": ["2026-10-30"], "buy": [300], "sell": [100],
+                                                     "std_buy": [300], "std_sell": [100]}
+    assert export.stock_margin_hist(one, "9999") is None and export.stock_margin_hist(None, "1000") is None
+    h = export.margin_wide({"2026-11-02": day2, "2026-10-30": day1}, ["1000", "1001", "1003"])
+    assert h["dates"] == ["2026-10-30", "2026-11-02"]
+    assert export.stock_margin_hist(h, "1003") == {"dates": ["2026-11-02"], "buy": [300], "sell": [200],
+                                                   "std_buy": [300], "std_sell": [200]}  # 上場前の日は出さない
+    summ = export._margin_hist_summary(h, h["dates"])
+    assert summ["days"] == 2 and summ["first"] == "2026-10-30"
+    # 1日目: 1000 は 300÷100、1001 は売り残なし（1002 は対象外の銘柄）→ 合計 600÷100
+    assert summ["total"][0] == {"date": "2026-10-30", "ratio": 6.0, "short": 0, "rated": 1, "stocks": 2}
+    assert summ["total"][1]["rated"] == 3 and summ["total"][1]["short"] == 0
+    from types import SimpleNamespace
+    m = {"std_buy": 300, "std_buy_chg": 0, "std_sell": 50, "std_sell_chg": 0, "std_ratio": 6.0, "std_ratio_prev": None,
+         "std_buy_days": None, "std_sell_days": None, "loan": True}
+    st = SimpleNamespace(as_of="2026-11-04", reasons=SimpleNamespace(
+        detail={"1001": {"margin": m}, "1003": {"margin": {**m, "std_ratio": 1.5}}},
+        status={"margin": {"date": "2026-11-02"}}))
+    doc = export._margin(st, h)
+    trend = {r[0]: r[doc["columns"].index("trend")] for r in doc["rows"]}
+    assert trend == {"1001": [None, 6.0], "1003": [None, 1.5]}
+    assert export._margin(st, None)["hist"] is None and export._margin(st, None)["rows"][0][-1] is None
 
 
 if __name__ == "__main__":

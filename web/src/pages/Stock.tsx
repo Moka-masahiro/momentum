@@ -3,11 +3,12 @@ import { api, invalidate, paths, useData } from "../data";
 import { setWatched } from "../watch";
 import Radar from "../components/Radar";
 import StockChart from "../components/StockChart";
+import LineChart, { type LineDef } from "../components/LineChart";
 import { Card, Delta, Disclaimer, ErrorBox, Icon, Loading, RankBadge, SessionBadge, SessionNote, Sheet, THEME_STATE, WhyChip } from "../components/ui";
-import { mdDate, mdTime, num, pct, shares, signed, yen, yenLarge } from "../format";
+import { histSpan, mdDate, mdTime, num, pct, shares, signed, yen, yenLarge } from "../format";
 import { METRICS, RANK_TEXT, type MetricInfo } from "../metrics";
 import { back, go, rememberStock } from "../router";
-import type { Disclosure, Margin, Reason, Report, StockDetail, StockSignal } from "../types";
+import type { Disclosure, Margin, Reason, Report, StockDetail, StockMarginHist, StockSignal } from "../types";
 
 export default function Stock({ code }: { code: string }) {
   const { data, error, loading, reload } = useData<StockDetail>(paths.stock(code), () => api.stock(code));
@@ -46,6 +47,7 @@ export default function Stock({ code }: { code: string }) {
         <div className={loading ? "fade-stale" : ""}>
           <Summary d={data} />
           <ReasonCard d={data} />
+          {data.margin_hist && <MarginHistCard h={data.margin_hist} />}
           <MetricsCard d={data} onOpen={setSheet} />
           <RadarCard d={data} />
           <Card icon="trend" title="モメンタム度推移 × 日足" guide="chart" sub="上段=株価、下段=モメンタム度（0〜100）。指で触れた日の値が上に出ます">
@@ -292,6 +294,51 @@ function MarginRows({ m }: { m: Margin }) {
         </>
       )}
     </>
+  );
+}
+
+/* ---------- 信用残の推移 ---------- */
+
+const ratioText = (v: number | null) => (v == null ? "—" : `${num(v, v < 10 ? 2 : v < 100 ? 1 : 0)}倍`);
+const MARGIN_PANES = [130, 90];
+
+/**
+ * 信用残の推移（申込日ごと）。制度信用の売り残がある銘柄は制度信用倍率と制度信用の残高、
+ * 無い銘柄（貸借銘柄でない）は一般信用を含む合計で描く。点が1つのうちは表だけにする。
+ */
+function MarginHistCard({ h }: { h: StockMarginHist }) {
+  const ratioOf = (b: (number | null)[], s: (number | null)[]) => b.map((x, i) => (x != null && s[i] ? x / s[i]! : null));
+  const stdRatio = ratioOf(h.std_buy, h.std_sell);
+  const std = stdRatio.some((v) => v != null);
+  const buy = std ? h.std_buy : h.buy;
+  const sell = std ? h.std_sell : h.sell;
+  const ratio = std ? stdRatio : ratioOf(h.buy, h.sell);
+  const n = h.dates.length;
+  const lines = useMemo<LineDef[]>(() => [
+    { key: "ratio", label: std ? "制度信用倍率" : "信用倍率", color: "#4fc8ee", series: { dates: h.dates, values: ratio }, pane: 0, format: ratioText },
+    { key: "buy", label: "買い残", color: "#f08a5d", series: { dates: h.dates, values: buy }, pane: 1, format: shares, width: 1 },
+    { key: "sell", label: "売り残", color: "#8fa8ff", series: { dates: h.dates, values: sell }, pane: 1, format: shares, width: 1 },
+  ], [h]); // eslint-disable-line react-hooks/exhaustive-deps
+  const recent = h.dates.map((d, i) => ({ d, buy: buy[i], sell: sell[i], ratio: ratio[i] })).reverse().slice(0, 5);
+  return (
+    <Card icon="trend" title="信用残の推移" aside={histSpan(n, h.dates[0])}
+      sub={std ? "制度信用だけの買い残・売り残と倍率（一般信用は含まない）" : "制度信用の売り残が無いので、一般信用を含む合計"}>
+      {n >= 2
+        ? <LineChart lines={lines} height={250} paneHeights={MARGIN_PANES} />
+        : <p className="note mb-2">履歴がまだ1日分なので、線はたまってから出ます（大引け後の更新ごとに1日ずつ増えます）。</p>}
+      <table className="tbl mt-2">
+        <thead><tr><th>申込日</th><th>買い残</th><th>売り残</th><th>倍率</th></tr></thead>
+        <tbody>
+          {recent.map((x) => (
+            <tr key={x.d}><td>{mdDate(x.d)}</td><td>{shares(x.buy)}</td><td>{shares(x.sell)}</td><td>{x.sell === 0 ? "売り残なし" : ratioText(x.ratio)}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="note mt-2">
+        JPX の銘柄別信用取引残高を、このアプリが2026年11月から毎日残しているもの（JPX には直近5営業日分しか置かれていません）。
+        取れなかった日は飛ばして線をつなぎます。倍率の推移とその後の値動きの関係は、まだ検証していません。
+      </p>
+    </Card>
   );
 }
 

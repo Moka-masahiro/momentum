@@ -8,11 +8,11 @@
     market    地合いの推移（日経平均・市場区分の中央値・ランクB以上の比率）
     signals   直近20営業日のシグナル（その日の値動きの理由付き）と、種別ごとの過去の実績
     verify    検証（IC・ランク別・十分位・シグナル実績・分割補正の記録）
-    margin    制度信用倍率（制度信用の買い残÷売り残）の一覧と、全銘柄の合計
+    margin    制度信用倍率（制度信用の買い残÷売り残）の一覧と、全銘柄の合計（どちらも履歴があれば推移つき）
     disclosures  開示の一覧（定例を除く）: これからの材料と、最新日に効いた開示
     themes    テーマごとの値動きと売買代金（そろって上げているテーマ・資金が集まっているかもしれないテーマ）
     stocks/<code>  1銘柄の詳細（チャート・指標・5角形・シグナル履歴・テクニカル整理・
-                   値動きの理由・直近30日の開示）
+                   値動きの理由・直近30日の開示・信用残の推移）
 """
 import math
 from datetime import datetime, timedelta, timezone
@@ -25,6 +25,9 @@ from .compute import State
 
 CHART_DAYS = 250           # 詳細画面のチャートの本数（約1年）
 SIGNAL_DAYS = 20           # シグナル一覧で遡れる営業日数
+MARGIN_HIST_DAYS = 250     # 銘柄詳細の信用残の推移（申込日で約1年分）
+MARGIN_TREND_DAYS = 20     # 制度信用倍率の一覧の小さな推移線（申込日で約4週分）
+MARGIN_HIST_FIELDS = ("buy", "sell", "std_buy", "std_sell")
 JST = timezone(timedelta(hours=9))
 
 LATEST_COLUMNS = (
@@ -38,7 +41,7 @@ LATEST_COLUMNS = (
 DISCLOSURE_COLUMNS = ("code", "time", "category", "kind", "title", "url", "pending", "day", "ret", "idio", "late")
 # 制度信用倍率の一覧の列（残高は制度信用の分だけ。reasons._std_margin）
 MARGIN_COLUMNS = ("code", "loan", "buy", "buy_chg", "sell", "sell_chg", "ratio", "ratio_prev",
-                  "buy_days", "sell_days", "premium", "premium_max")
+                  "buy_days", "sell_days", "premium", "premium_max", "trend")
 
 
 def _r(x, nd: int = 1):
@@ -108,7 +111,8 @@ def documents(st: State) -> Iterator[tuple[str, dict]]:
     tag = thm.hot_tag(st.themes) if st.themes else {}
     rows = {code: row(code, r, tag.get(code)) for code, r in latest.iterrows()}
     market = _market(st)
-    margin = _margin(st)
+    hist = margin_wide(st.margin_history, list(st.panel.codes))
+    margin = _margin(st, hist)
     yield "home", _home(st, rows, market, built_at, margin)
     yield "latest", _latest(st, rows)
     yield "market", {"as_of": st.as_of, **market}
@@ -127,7 +131,9 @@ def documents(st: State) -> Iterator[tuple[str, dict]]:
         for code in t["codes"]:
             themes_of.setdefault(code, []).append({"name": t["name"], "state": t["state"], "flow": t["flow"]})
     for code in st.panel.codes:
-        yield f"stocks/{code}", stock(st, code, rows[code], pct, ranks, by_code.get(code), themes_of.get(code, []))
+        doc = stock(st, code, rows[code], pct, ranks, by_code.get(code), themes_of.get(code, []))
+        doc["margin_hist"] = stock_margin_hist(hist, code)
+        yield f"stocks/{code}", doc
 
 
 def signal_defs() -> list[dict]:
@@ -230,28 +236,97 @@ def _latest(st: State, rows: dict) -> dict:
     }
 
 
-def _margin(st: State) -> dict:
+def _margin(st: State, hist: dict | None = None) -> dict:
     """制度信用の残高と倍率の一覧（JPX「銘柄別信用取引残高」のうち制度信用の分）。
 
     date は申込日（公表は次の営業日の16時ごろなので、最新日の前の取引日になる）。
     信用残を取れなかった日は rows が空で summary が None。
+    履歴（margin_wide）があれば、各行の trend に直近 MARGIN_TREND_DAYS 日分の制度信用倍率
+    （hist.dates の順。売り残が無い日・載っていない日は None）、hist に全銘柄の合計の推移を付ける。
     """
     rs = st.reasons
+    trend_dates = hist["dates"][-MARGIN_TREND_DAYS:] if hist else []
+    ratios = (hist["std_buy"][trend_dates] / hist["std_sell"][trend_dates].where(hist["std_sell"][trend_dates] > 0)
+              if hist else None)
     rows = []
     for code, d in (rs.detail.items() if rs else ()):
         m = d.get("margin")
         if m and "std_buy" in m:
             pr = d.get("premium") or {}     # 逆日歩（1日あたりの円と、その上限の最高料率。付いていなければ None）
+            trend = None
+            if ratios is not None and m["std_ratio"] is not None and code in ratios.index:
+                trend = [_ratio(x) for x in ratios.loc[code]]
             rows.append([code, m["loan"], m["std_buy"], m["std_buy_chg"], m["std_sell"], m["std_sell_chg"],
                          m["std_ratio"], m["std_ratio_prev"], m["std_buy_days"], m["std_sell_days"],
-                         pr.get("daily"), pr.get("max")])
+                         pr.get("daily"), pr.get("max"), trend])
     return _finite({
         "as_of": st.as_of,
         "date": rs.status["margin"]["date"] if rs else None,
         "summary": margin_summary(rows),
+        "hist": _margin_hist_summary(hist, trend_dates),
         "columns": list(MARGIN_COLUMNS),
         "rows": rows,
     })
+
+
+def _ratio(x) -> float | None:
+    """倍率を桁数に合わせて丸める（数百倍の銘柄まであるので、大きいほど小数を減らす）。"""
+    if x is None or not math.isfinite(x):
+        return None
+    return round(float(x), 2 if x < 10 else 1 if x < 100 else 0)
+
+
+def margin_wide(history: dict, codes: list[str]) -> dict | None:
+    """信用残の履歴 {申込日: 表} を、項目ごとの表（行＝銘柄、列＝申込日。直近 MARGIN_HIST_DAYS 日分）にする。
+
+    このアプリの対象銘柄（codes）だけにする（ETF・REIT は履歴のファイルにはあるが、画面には出さない）。
+    履歴が無ければ None。
+    """
+    if not history:
+        return None
+    dates = sorted(history)[-MARGIN_HIST_DAYS:]
+    out: dict = {"dates": dates}
+    for f in MARGIN_HIST_FIELDS:
+        cols = {d: (history[d][f] if f in history[d].columns else pd.Series(dtype=float)) for d in dates}
+        out[f] = pd.DataFrame({d: s.reindex(codes) for d, s in cols.items()}, index=codes).astype(float)
+    return out
+
+
+def _margin_hist_summary(hist: dict | None, trend_dates: list[str]) -> dict | None:
+    """全銘柄の合計の制度信用倍率と売り長の銘柄数の、申込日ごとの推移（一覧の上に出す）。"""
+    if not hist:
+        return None
+    buy, sell = hist["std_buy"], hist["std_sell"]
+    total = []
+    for d in hist["dates"]:
+        b, s_ = buy[d], sell[d]
+        known = b.notna() & s_.notna()
+        if not known.any():
+            continue
+        rated = known & (s_ > 0)
+        tb, ts = float(b[known].sum()), float(s_[known].sum())
+        total.append({"date": d, "ratio": _r(tb / ts, 2) if ts else None,
+                      "short": int((b[rated] < s_[rated]).sum()), "rated": int(rated.sum()), "stocks": int(known.sum())})
+    return {
+        "days": len(hist["dates"]),         # 履歴のある申込日の数（MARGIN_HIST_DAYS まで）
+        "first": hist["dates"][0],
+        "trend_dates": trend_dates,         # 各行の trend の日付
+        "total": total,
+    }
+
+
+def stock_margin_hist(hist: dict | None, code: str) -> dict | None:
+    """1銘柄の信用残の推移（申込日ごと。載っていない日は None）。履歴が無い・一度も載っていなければ None。"""
+    if not hist or code not in hist["buy"].index:
+        return None
+    vals = {f: hist[f].loc[code] for f in MARGIN_HIST_FIELDS}
+    have = vals["buy"].notna()
+    if not have.any():
+        return None
+    start = have.to_numpy().argmax()        # 最初に載った日から（上場前の日は出さない）
+    dates = hist["dates"][start:]
+    return {"dates": dates,
+            **{f: [None if pd.isna(x) else int(x) for x in vals[f].iloc[start:]] for f in MARGIN_HIST_FIELDS}}
 
 
 def _disclosures(st: State) -> dict:

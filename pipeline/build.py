@@ -45,6 +45,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import fetch  # noqa: E402
+import margin_history  # noqa: E402
 import market_days  # noqa: E402
 import secure  # noqa: E402
 import should_build  # noqa: E402
@@ -142,6 +143,10 @@ def main() -> int:
                     help="いつ時点のデータか。auto は実行した時刻から決める（手元で昼の表示を確かめるときは am）")
     ap.add_argument("--keep", help="大引け後の取得結果を暗号化して保存する先（開示だけの更新 --light で使い回す）")
     ap.add_argument("--light", help="--keep で保存した取得結果を読み、開示だけ取り直して作り直す（株価は取得しない）")
+    ap.add_argument("--history", default=str(margin_history.DIR),
+                    help="信用残の履歴の置き場所（申込日ごとの暗号化ファイル。読むのは毎回）")
+    ap.add_argument("--record", action="store_true",
+                    help="信用残の履歴に書き足す（大引け後の全体の更新だけ。JPX に残る5営業日分の抜けも埋める）")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -208,6 +213,7 @@ def main() -> int:
     st.themes, theme_moves = _themes(st)
     now = pd.Timestamp(datetime.now(JST).replace(tzinfo=None))
     extras_blob = None
+    ex = None
     if kept:
         st.prices_at = kept["status"].get("built")
         try:
@@ -219,7 +225,9 @@ def main() -> int:
             return 1
         logger.info("reasons: %s", json.dumps(reasons.brief(st.reasons.status), ensure_ascii=False))
     else:
-        st.reasons, extras_blob = _reasons(args, st, now, keeping, theme_moves)
+        st.reasons, extras_blob, ex = _reasons(args, st, now, keeping, theme_moves)
+    history = _margin_history(args, key, ex, record=args.record and not kept and session == "close")
+    st.margin_history = history["series"]
 
     out = Path(args.out)
     if out.exists():
@@ -268,6 +276,8 @@ def main() -> int:
             "elapsed_sec": elapsed,
             "reasons": reasons.brief(st.reasons.status if st.reasons else None),
         }
+        if history["record"]:
+            status["margin_history"] = history["record"]
     if fetched_blob and extras_blob:
         # 残した取得結果の名前（Actions のキャッシュに置くときの名前）を実行記録に書く。
         # should_build.py は、これがある大引けのデータにだけ開示だけの更新を行う
@@ -309,21 +319,46 @@ def _themes(st):
 def _reasons(args, st, now: pd.Timestamp, keeping: bool = False, theme_moves: dict | None = None):
     """値動きの理由。材料が取れなくても、株価と指標の公開は止めない。
 
-    戻り値は (理由, 取得した材料の pickle)。pickle は --keep 用で、計算に渡す前の状態を残す。
+    戻り値は (理由, 取得した材料の pickle, 材料)。pickle は --keep 用で、計算に渡す前の状態を残す。
     """
     try:
         ex = _load_extras(args, st.panel.dates, now)
     except Exception:
         logger.exception("値動きの理由の材料を取得できませんでした（理由なしで公開します）")
-        return None, None
+        return None, None, None
     snapshot = pickle.dumps(ex, protocol=pickle.HIGHEST_PROTOCOL) if keeping else None
     try:
         rs = reasons.compute(st.panel, st.base, ex, now, session=st.session, theme_moves=theme_moves)
         logger.info("reasons: %s", json.dumps(reasons.brief(rs.status), ensure_ascii=False))
-        return rs, snapshot
+        return rs, snapshot, ex
     except Exception:
         logger.exception("値動きの理由を作れませんでした（理由なしで公開します）")
-        return None, snapshot
+        return None, snapshot, ex
+
+
+def _margin_history(args, key: bytes, ex, record: bool) -> dict:
+    """信用残の履歴を読み（毎回）、record なら書き足す（大引け後の全体の更新だけ）。
+
+    戻り値の series は {申込日: 表}（画面用。その回に取得した最新日も足してある）、record は実行記録用の要約。
+    補助の情報なので、読めない・書けないときも公開は止めない。書けなかった日は、JPX に残っている5営業日の
+    うちに次の記録で埋まる。
+    """
+    folder = Path(args.history)
+    current, day = (ex.margin, ex.margin_date) if ex is not None else (None, None)
+    rec = None
+    if record:
+        try:
+            rec = margin_history.record(folder, key, current, day)
+            logger.info("margin history: %s", json.dumps(rec, ensure_ascii=False))
+        except Exception as e:
+            logger.exception("信用残の履歴に書き足せませんでした（履歴なしの日として公開します）")
+            rec = {"error": str(e)}
+    try:
+        series = margin_history.merge(margin_history.load(folder, key), current, day)
+    except Exception:
+        logger.exception("信用残の履歴を読めませんでした（履歴なしで公開します）")
+        series = {}
+    return {"series": series, "record": rec}
 
 
 def _disclosure_start(dates: pd.DatetimeIndex, now: pd.Timestamp):

@@ -402,18 +402,32 @@ def fetch_margin_all(timeout: int = 120) -> tuple[pd.DataFrame, str | None]:
     そのうち制度信用の分 std_sell, std_sell_chg, std_buy, std_buy_chg、貸借銘柄かどうかの loan
     （株数。ratio は上場株式数に対する%。前日比が無い日は None）。PDF の読み取りに約40秒かかる。
     """
-    links = _jpx_find(MARGIN_FILE, timeout)
+    links = margin_links(timeout)
     if not links:
         raise RuntimeError("銘柄別信用取引残高のファイルが見つかりません")
+    return fetch_margin_pdf(links[0], timeout)
+
+
+def margin_links(timeout: int = 60) -> list[str]:
+    """JPX に置かれている銘柄別信用取引残高の PDF（新しい申込日を先に）。
+
+    置かれているのは直近5営業日分だけで、それより古いファイルは同じ置き場所でも 404 になる
+    （2026-11-04 に確認: 10/27〜11/02 申込み分の5つ。10/26 以前は 404）。信用残の履歴は、このアプリで残すしかない。
+    """
+    return _jpx_find(MARGIN_FILE, timeout)
+
+
+def fetch_margin_pdf(url: str, timeout: int = 120) -> tuple[pd.DataFrame, str | None]:
+    """銘柄別信用取引残高の PDF を1つ読む。戻り値は (表, 申込日)。読めた行が少なすぎれば例外。"""
     from pypdf import PdfReader
 
-    reader = PdfReader(io.BytesIO(_get(links[0], timeout)))
+    reader = PdfReader(io.BytesIO(_get(url, timeout)))
     lines = [line for page in reader.pages for line in (page.extract_text() or "").splitlines()]
     df = parse_margin_lines(lines)
     if len(df) < MIN_MARGIN_ROWS:
         raise RuntimeError(f"銘柄別信用取引残高を {len(df)} 行しか読めませんでした（形式が変わった可能性）")
-    logger.info("margin balances: %d issues (%s)", len(df), _file_date(links[0]))
-    return df, _file_date(links[0])
+    logger.info("margin balances: %d issues (%s)", len(df), _file_date(url))
+    return df, _file_date(url)
 
 
 # 株数の行の14項目: 売残, 前日比, 上場比, 買残, 前日比, 上場比, 一般信用の売残, 前日比, 制度信用の売残, 前日比,
