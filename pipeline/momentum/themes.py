@@ -98,12 +98,15 @@ def load(path: Path = TABLE) -> list[Theme]:
 def rank_z(values: np.ndarray, member: np.ndarray) -> float | None:
     """member の values が、それ以外より高い方に偏っている度合い（順位和検定の z。正規近似）。"""
     ok = ~np.isnan(values)
-    x, m = values[ok], member[ok]
+    return _rank_z(pd.Series(values[ok]).rank().to_numpy(), member[ok])
+
+
+def _rank_z(ranks: np.ndarray, m: np.ndarray) -> float | None:
+    """rank_z の本体。ranks は欠損を除いた値の順位、m はそのうちテーマの銘柄か（同じ日の順位を使い回すため）。"""
     n1 = int(m.sum())
-    n2 = len(x) - n1
+    n2 = len(ranks) - n1
     if n1 < MIN_MEMBERS or n2 < MIN_MEMBERS:
         return None
-    ranks = pd.Series(x).rank().to_numpy()
     u = ranks[m].sum() - n1 * (n1 + 1) / 2
     return float((u - n1 * n2 / 2) / math.sqrt(n1 * n2 * (n1 + n2 + 1) / 12))
 
@@ -123,6 +126,13 @@ def turnover_ratio(turnover: pd.DataFrame, i: int, w: int, scale: float = 1.0) -
     enough = (~np.isnan(base)).sum(axis=0) >= MIN_BASE
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.where(enough & (usual > 0), recent.mean(axis=0) / usual, np.nan)
+
+
+def usual_turnover(turnover: pd.DataFrame) -> pd.DataFrame:
+    """日ごとの「普段の売買代金」: その日より前の BASE_DAYS 営業日のうち、売買のあった日の中央値（MIN_BASE 日に
+    満たなければ NaN）。turnover_ratio(turnover, i, 1) の分母を、全部の日についてまとめて出す
+    （開示への市場の反応で、2年分の日を見るため。1日ずつ出すと 40秒かかった）。"""
+    return turnover.where(turnover > 0).rolling(BASE_DAYS, min_periods=MIN_BASE).median().shift(1)
 
 
 def _r(x, nd: int = 2):
@@ -201,10 +211,12 @@ def day_labels(close: pd.DataFrame, liquid: pd.DataFrame, themes: list[Theme], d
             r = (close.iloc[i] / close.iloc[i - 1] - 1).to_numpy(dtype=float)
         rel = np.where(liq, r - np.nanmedian(r[liq]), np.nan)
         day = close.index[i].strftime("%Y-%m-%d")
+        ok = ~np.isnan(rel)
+        ranks = pd.Series(rel[ok]).rank().to_numpy()      # 順位はその日に1回だけ（2年分を見るので）
         for t, idx in index:
             member = np.zeros(len(codes), dtype=bool)
             member[idx] = True
-            z = rank_z(rel, member & liq)
+            z = _rank_z(ranks, (member & liq)[ok])
             if z is None or abs(z) < DAY_Z:
                 continue
             text = f"テーマ「{t.name}」がそろって{'上昇' if z > 0 else '下落'}"

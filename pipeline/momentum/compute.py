@@ -42,6 +42,7 @@ class State:
     prices_at: str | None = None          # 株価を取得した更新の時刻。開示だけの更新（build.py --light）では、作った時刻より前
     themes: dict | None = None            # テーマごとの値動きと売買代金（themes.compute。作れなければ None）
     margin_history: dict = field(default_factory=dict)   # 信用残の履歴 {申込日: 表（index=code）}（build.py が入れる）
+    reaction: object | None = None        # 開示への市場の反応（reaction.Reaction。作れなければ None）
 
     @property
     def as_of(self) -> str:

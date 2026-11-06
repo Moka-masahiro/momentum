@@ -30,6 +30,7 @@
 - 逆日歩は、権利取りの時期に優待目当てのつなぎ売りでも付くので、判定には使わず表示だけにする
 - 開示が取れなかった日を含むときは判定しない（開示があったのに「材料不明」と出さないため）
 """
+import functools
 import re
 import unicodedata
 import warnings
@@ -85,8 +86,10 @@ HEAT_FLAGS = "規日株喚"     # 需給の手がかりに使う印（監・○�
 EX_RIGHTS_MONTHS = (3, 9)  # 権利落ちで下げる銘柄が多い月（3月・9月決算と中間の基準日）
 
 CLOSE = pd.Timedelta(hours=15, minutes=30)   # 東証の大引け（2024-11-05 から。それ以前は15:00）
+OPEN = pd.Timedelta(hours=9)                 # 寄り付き
 WINDOW_DAYS = 20           # 判定する取引日数（シグナル画面と同じ）
 LIST_DAYS = 30             # 銘柄詳細に出す開示の日数（暦日。TDnet の PDF は31日で消える）
+FEED_DAYS = 5              # 開示の一覧の「効いた開示」に出す取引日の数（5日後までの反応が見えるように）
 
 LABELS = {"news": "ニュース", "supply": "需給", "market": "地合い", "unknown": "材料不明"}
 
@@ -105,6 +108,10 @@ _RULES = [
     # 後ろの増資・M&A の規則より先に定例にする（2026-09〜10 の実測で157件。うち141件が増資・売出しになっていた）
     # 「持株会社」（再編のニュース）は含めない: 共同持株会社の設立まで定例になった
     (r"株式報酬|譲渡制限付|ストック・?オプション|持株会(?!社)|株式給付|株式交付信託|ESOP|BIP信託", "定例", "routine", None),
+    # 発行済みの新株予約権の行使の報告（月間の行使状況・大量行使・行使完了）。新しい増資の決定ではなく、決まった
+    # 手続きの報告。後ろの「新株予約権.*行使」の規則より先に定例にする（2026-11 に過去2年分を開示への市場の反応で
+    # 集計して分かった: 「増資・売出し」4,265件のうち 1,711件がこれだった）
+    (r"行使状況|大量行使|行使完了", "定例", "routine", None),
     (r"自己株式.*処分", "増資・売出し", "supply", "自己株式の処分"),
     (r"株式交換|株式移転|合併|会社分割|吸収分割|事業譲渡|事業譲受|事業の譲|子会社化|子会社等?の異動|"
      r"株式の取得|株式取得|株式の?譲渡|持分法|資本業務提携|資本提携|親会社の異動|その他の関係会社の異動|株式併合",
@@ -154,13 +161,25 @@ _PRIORITY = ["TOB・M&A", "業績修正", "決算", "報道への回答", "上�
              "増資・売出し", "自社株買い", "大株主の異動", "貸借銘柄"]
 
 
-def classify(title: str) -> tuple[str, str, str]:
-    """開示の表題 → (分類, 種類, 一覧に出す短い文言)。"""
+@functools.lru_cache(maxsize=None)     # 開示への市場の反応で2年分（20万件ほど）を分類するので、同じ表題は1回だけ
+def _match(title: str) -> tuple[str, str, str | None]:
+    """開示の表題 → (分類, 種類, 規則で決まっている文言。無ければ None)。"""
     t = unicodedata.normalize("NFKC", title)
     for rx, cat, kind, text in _COMPILED:
         if rx.search(t):
-            return cat, kind, text or short_title(title)
-    return "その他", "news", short_title(title)
+            return cat, kind, text
+    return "その他", "news", None
+
+
+def classify(title: str) -> tuple[str, str, str]:
+    """開示の表題 → (分類, 種類, 一覧に出す短い文言)。"""
+    cat, kind, text = _match(title)
+    return cat, kind, text or short_title(title)
+
+
+def subtype(title: str) -> str | None:
+    """分類の中の細かい種類（「業績予想の上方修正」「増配」など、規則で文言が決まっているものだけ）。"""
+    return _match(title)[2]
 
 
 def short_title(t: str) -> str:
@@ -181,6 +200,18 @@ def effective_day(times: pd.Series, dates: pd.DatetimeIndex) -> pd.Series:
     ok = pos < len(dates)
     out[ok] = dates[pos[ok]]
     return out
+
+
+def timing(times: pd.Series, dates: pd.DatetimeIndex) -> pd.Series:
+    """開示が出た時間帯: pre = 取引日の寄り付き（9:00）より前 / mid = 取引日の取引時間中（9:00〜15:30。昼休みを含む）/
+    post = 引け（15:30）以降・休日。データの最後の日より後の日は、土日だけを休日とみなす（祝日はまだ分からない）。"""
+    t = pd.to_datetime(times)
+    day = t.dt.normalize()
+    tod = t - day
+    known = day <= dates[-1]
+    trading = np.where(known, day.isin(dates), day.dt.dayofweek < 5)
+    out = np.where(~trading | (tod >= CLOSE), "post", np.where(tod < OPEN, "pre", "mid"))
+    return pd.Series(out, index=times.index)
 
 
 def _month_days(d: pd.Timestamp, dates: pd.DatetimeIndex) -> pd.DatetimeIndex:
@@ -649,14 +680,16 @@ def compute(p, base: pd.DataFrame, ex: Extras, now: pd.Timestamp, session: str =
             lists[code] = out
 
     # --- 開示の一覧（定例を除く）: これからの材料（引け後＝次の取引日、昼の実行なら 11:30 以降＝後場）と、
-    #     最新日に効いた開示（その日の値動き付き）。銘柄ごとに、判定に効く順で並べる ---
+    #     直近 FEED_DAYS 取引日に効いた開示（その日の値動き付き）。銘柄ごとに、判定に効く順で並べる ---
     feed = []
     if len(disc):
-        live = disc[(disc["kind"] != "routine") & (disc["day"].isna() | (disc["day"] == dates[last]))]
+        first = dates[max(last - FEED_DAYS + 1, 0)]
+        live = disc[(disc["kind"] != "routine") & (disc["day"].isna() | (disc["day"] >= first))]
         for x in sorted(live.itertuples(), key=lambda r: (r.code, _importance(r))):
             item = {"code": x.code, **_item(x), "text": x.text}
             if item["day"]:
-                item["ret"], item["idio"] = _pct(R[last, col[x.code]]), _pct(I[last, col[x.code]])
+                k = pos[x.day]
+                item["ret"], item["idio"] = _pct(R[k, col[x.code]]), _pct(I[k, col[x.code]])
             feed.append(item)
     ahead: dict = {}
     for item in feed:               # 一覧の行に付ける印は、これからの材料の先頭（いちばん効きそうなもの）

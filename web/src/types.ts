@@ -103,6 +103,22 @@ export interface ThemesResponse {
   loose: StockRow[];                        // どのテーマの表にも無い、5日で大きく上げた銘柄
 }
 
+/** 開示への市場の反応（pipeline/momentum/reaction.py の item）。% は株価の変化率 */
+export interface Rx {
+  t: "pre" | "mid" | "post";  // 出た時間帯: 寄り付き前 / 取引時間中 / 引け後・休日
+  r: number | null;         // その日の市場比（騰落率 − 市場の中央値）
+  r5: number | null;        // 効いた日を含む n5 日の市場比
+  n5: number;               // r5 の日数（5 に満たないうちは途中）
+  gap: number | null;       // 寄り付きの窓（前日終値 → 始値）
+  oc: number | null;        // 寄り付きから引けまで
+  tr: number | null;        // その日の売買代金が普段（前250営業日の中央値）の何倍か
+  liq: boolean;             // その日に流動性があったか
+  with?: string[];          // 同じ日に効いた、ほかの分類の開示
+  after?: number;           // 5日の間に、ほかの開示が効いた日の数
+  theme?: string;           // その日にそろって動いたテーマ
+  partial?: "am" | "intraday";   // 最新日が途中経過（前場・取引中）
+}
+
 export interface Disclosure {
   time: string;             // "2026-09-25 08:30"
   title: string;
@@ -114,6 +130,7 @@ export interface Disclosure {
   late?: boolean;           // 新着（株価を取得したあとで、開示だけ取り直して見つかったもの）
   ret?: number | null;      // その日の騰落率（%）
   idio?: number | null;     // その日の業種の中央値との差（%）
+  rx?: Rx | null;           // 市場の反応（古いデータには無い）
 }
 
 export interface Reason {
@@ -229,13 +246,46 @@ export interface FeedItem {
   ret: number | null;               // その日の騰落率（%）
   idio: number | null;              // その日の業種の中央値との差（%）
   late?: boolean | null;            // 新着（株価を取得したあとで、開示だけ取り直して見つかったもの）
+  rx?: Rx | null;                   // 市場の反応（効いた開示だけ。古いデータには無い）
 }
 
-/** 銘柄ごとにまとめた開示（先頭がいちばん効きそうなもの） */
+/** 銘柄ごとにまとめた開示（先頭がいちばん効きそうなもの）。効いた開示は、銘柄と効いた日ごと */
 export interface DisclosureGroup {
   stock: StockRow;
   items: FeedItem[];
   watched: boolean;
+  day: string | null;
+}
+
+/** 種類ごとの傾向の1行（pipeline/momentum/reaction.py の _summary） */
+export interface RxSummary {
+  n: number;                // 件数
+  r: number | null;         // 市場比の中央値（%）
+  up: number | null;        // 市場比がプラスだった割合（%）
+  abs: number | null;       // 動きの大きさ（市場比の絶対値の中央値）
+  n5: number;
+  r5: number | null;        // 5日の市場比の中央値
+  tr: number | null;        // 売買代金の倍率の中央値
+  gap: number | null;       // 寄り付きの窓の中央値
+}
+
+export interface RxGroup extends RxSummary {
+  category: string;
+  subs: (RxSummary & { sub: string })[];
+}
+
+export interface RxScope {
+  groups: RxGroup[];
+  total: number;            // 数えた開示（同じ銘柄・同じ日・同じ分類は1件）
+  used: number;             // 傾向に使った開示
+  excluded: { mid: number; with: number; theme: number };
+}
+
+export interface ReactionsResponse {
+  as_of: string;
+  session?: Session;
+  stats: { first: string | null; last: string | null; min_n: number; days: number;
+           scopes: { all?: RxScope; liquid?: RxScope } } | null;
 }
 
 export interface DisclosuresResponse {

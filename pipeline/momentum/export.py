@@ -9,7 +9,8 @@
     signals   直近20営業日のシグナル（その日の値動きの理由付き）と、種別ごとの過去の実績
     verify    検証（IC・ランク別・十分位・シグナル実績・分割補正の記録）
     margin    制度信用倍率（制度信用の買い残÷売り残）の一覧と、全銘柄の合計（どちらも履歴があれば推移つき）
-    disclosures  開示の一覧（定例を除く）: これからの材料と、最新日に効いた開示
+    disclosures  開示の一覧（定例を除く）: これからの材料と、直近5取引日に効いた開示（市場の反応つき）
+    reactions 開示への市場の反応の、種類ごとの傾向（reaction.stats）
     themes    テーマごとの値動きと売買代金（そろって上げているテーマ・資金が集まっているかもしれないテーマ）
     stocks/<code>  1銘柄の詳細（チャート・指標・5角形・シグナル履歴・テクニカル整理・
                    値動きの理由・直近30日の開示・信用残の推移）
@@ -38,7 +39,8 @@ LATEST_COLUMNS = (
 )
 # 開示の一覧の列（reasons.compute の feed）。pending が next / pm のものは、まだ値動きに効いていない。
 # late は新着（株価を取得したあとで、開示だけ取り直して見つかったもの）
-DISCLOSURE_COLUMNS = ("code", "time", "category", "kind", "title", "url", "pending", "day", "ret", "idio", "late")
+# rx は開示への市場の反応（reaction.item。効いた日がまだ来ていない・作れなかったときは None）
+DISCLOSURE_COLUMNS = ("code", "time", "category", "kind", "title", "url", "pending", "day", "ret", "idio", "late", "rx")
 # 制度信用倍率の一覧の列（残高は制度信用の分だけ。reasons._std_margin）
 MARGIN_COLUMNS = ("code", "loan", "buy", "buy_chg", "sell", "sell_chg", "ratio", "ratio_prev",
                   "buy_days", "sell_days", "premium", "premium_max", "trend")
@@ -118,6 +120,7 @@ def documents(st: State) -> Iterator[tuple[str, dict]]:
     yield "market", {"as_of": st.as_of, **market}
     yield "margin", margin
     yield "disclosures", _disclosures(st)
+    yield "reactions", _reactions(st)
     yield "themes", _themes(st)
     yield "signals", _signals(st)
     yield "verify", {"as_of": st.as_of, "computed_at": built_at, "signal_stats": st.stats,
@@ -331,7 +334,8 @@ def stock_margin_hist(hist: dict | None, code: str) -> dict | None:
 
 def _disclosures(st: State) -> dict:
     """開示の一覧（定例を除く）。前半が「これからの材料」（day が無い。引け後の開示＝次の取引日、
-    昼の実行では 11:30 以降＝後場）、後半が「最新日に効いた開示」（その日の騰落率と業種との差つき）。
+    昼の実行では 11:30 以降＝後場）、後半が「直近5取引日に効いた開示」（その日の騰落率と業種との差、
+    市場の反応 rx つき）。
 
     銘柄は売買代金（20日平均）の大きい順に並べる。最初は分類の優先順にしていたが、小さな会社の
     子会社異動が大型株の業績修正より前に来た（2026-10-08: カヤバの子会社異動がテルモの業績修正より上）。
@@ -344,7 +348,7 @@ def _disclosures(st: State) -> dict:
         by_code: dict = {}
         for x in (rs.feed if rs else []):
             if (x["day"] is None) == upcoming:
-                by_code.setdefault(x["code"], []).append(x)
+                by_code.setdefault(x["code"], []).append({**x, "rx": rx_of(st, x["code"], x)})
         for code in sorted(by_code, key=lambda c: (-turnover.get(c, 0.0), c)):
             parts += by_code[code]
     return _finite({
@@ -357,6 +361,19 @@ def _disclosures(st: State) -> dict:
         "columns": list(DISCLOSURE_COLUMNS),
         "rows": [[x.get(c) for c in DISCLOSURE_COLUMNS] for x in parts],
     })
+
+
+def rx_of(st: State, code: str, item: dict) -> dict | None:
+    """開示の行に付ける市場の反応（reaction.compute の by_key から。無ければ None）。"""
+    if st.reaction is None or not item.get("day"):
+        return None
+    return st.reaction.by_key.get((code, item["time"], item["title"]))
+
+
+def _reactions(st: State) -> dict:
+    """開示への市場の反応の、種類ごとの傾向（画面の「種類ごとの傾向」）。作れなかった日は stats が None。"""
+    return _finite({"as_of": st.as_of, "session": st.session,
+                    "stats": st.reaction.stats if st.reaction is not None else None})
 
 
 def margin_summary(rows: list[list]) -> dict | None:
@@ -519,7 +536,8 @@ def stock(st: State, code: str, r: dict, pct: dict, ranks: dict,
         "chart": chart,
         # 値動きの理由（最新日）と直近30日の開示。理由を作れなかった日は None / []
         "reason": _finite(st.reasons.detail.get(code)) if st.reasons else None,
-        "disclosures": _finite(st.reasons.disclosures.get(code, [])) if st.reasons else [],
+        "disclosures": _finite([{**x, "rx": rx_of(st, code, x)} for x in st.reasons.disclosures.get(code, [])])
+        if st.reasons else [],
         # この銘柄が入っているテーマ（手作りの表。状態は themes.py）
         "themes": themes or [],
     }

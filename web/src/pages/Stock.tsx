@@ -8,6 +8,7 @@ import { Card, Delta, Disclaimer, ErrorBox, Icon, Loading, RankBadge, SessionBad
 import { histSpan, mdDate, mdTime, num, pct, shares, signed, yen, yenLarge } from "../format";
 import { METRICS, RANK_TEXT, type MetricInfo } from "../metrics";
 import { back, go, rememberStock } from "../router";
+import { RxLine } from "../components/Reaction";
 import type { Disclosure, Margin, Reason, Report, StockDetail, StockMarginHist, StockSignal } from "../types";
 
 export default function Stock({ code }: { code: string }) {
@@ -362,7 +363,10 @@ function DisclosureList({ items }: { items: Disclosure[] }) {
         <p className="note mt-1">直近30日の開示はありません。</p>
       ) : (
         <>
-          <div className="note">右はその開示が効いた取引日の騰落率（かっこ内は業種平均との差）。表題を押すと TDnet の PDF が開きます（公開から31日で消えます）。</div>
+          <div className="note">
+            右はその開示が効いた取引日の騰落率（かっこ内は業種平均との差）。下の行は市場の反応（市場比＝市場全体の中央値との差・5取引日の市場比・
+            寄り付きの窓・寄り付きから引け・売買代金が普段の何倍か）で、良い悪いの判定や予想ではありません。表題を押すと TDnet の PDF が開きます（公開から31日で消えます）。
+          </div>
           {shown.map((x) => (
             <div key={x.time + x.title} className="grid gap-x-3 py-2 border-t border-[rgba(120,200,230,0.08)] first:border-t-0"
               style={{ gridTemplateColumns: "minmax(0,1fr) auto" }}>
@@ -373,6 +377,7 @@ function DisclosureList({ items }: { items: Disclosure[] }) {
                   {x.late && <span className="why why-new">新着</span>}
                 </div>
                 <DisclosureTitle x={x} className="text-[12.5px] mt-1 leading-snug" />
+                <RxLine rx={x.rx} />
               </div>
               <div className="text-right text-[12px] whitespace-nowrap">
                 {x.day ? (

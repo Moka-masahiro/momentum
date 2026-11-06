@@ -12,12 +12,13 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import build  # noqa: E402
+import disclosure_history  # noqa: E402
 import fetch  # noqa: E402
 import margin_history  # noqa: E402
 import market_days  # noqa: E402
 import secure  # noqa: E402
 import should_build  # noqa: E402
-from momentum import data, export, indicators as ind, reasons as rsn, signals as sig, themes  # noqa: E402
+from momentum import data, export, indicators as ind, reaction, reasons as rsn, signals as sig, themes  # noqa: E402
 
 
 def _frames(closes: list[float], flat_days: set[int] = frozenset()):
@@ -187,6 +188,12 @@ def test_classify_disclosure_titles():
         "代表取締役の異動に関するお知らせ": ("代表の交代", "news", "社長・代表の交代"),
         # 表記の揺れ（「子会社等の異動」「株式譲渡」）で「その他」になっていた（2026-10-09 の HOYA）
         "子会社等の異動（株式譲渡）に関するお知らせ": ("TOB・M&A", "news", "子会社等の異動（株式譲渡）"),
+        # 発行済みの新株予約権の行使の報告は定例（新しい増資の決定と分ける。発行の決定は増資・売出しのまま）
+        "第10回新株予約権(行使価額修正条項付)の月間行使状況に関するお知らせ":
+            ("定例", "routine", "第10回新株予約権(行使価額修正条項付)の月間行使状況"),
+        "行使価額修正条項付新株予約権の大量行使に関するお知らせ": ("定例", "routine", "行使価額修正条項付新株予約権の大量行使"),
+        "第三者割当による第13回新株予約権（行使価額修正条項付）の発行に関するお知らせ":
+            ("増資・売出し", "supply", "新株予約権(希薄化)"),
     }
     for title, want in cases.items():
         assert rsn.classify(title) == want, (title, rsn.classify(title))
@@ -964,6 +971,171 @@ def test_margin_history_for_the_screens():
     trend = {r[0]: r[doc["columns"].index("trend")] for r in doc["rows"]}
     assert trend == {"1001": [None, 6.0], "1003": [None, 1.5]}
     assert export._margin(st, None)["hist"] is None and export._margin(st, None)["rows"][0][-1] is None
+
+
+def _reaction_panel():
+    """10銘柄・300営業日。始値は前日終値と同じ（窓なし）にして、指定した日だけ動かす。"""
+    idx = pd.bdate_range("2025-06-02", periods=300)
+    codes = [f"{2000 + i}" for i in range(10)]
+    close = pd.DataFrame(1000.0, index=idx, columns=codes)
+    vol = pd.DataFrame(10000.0, index=idx, columns=codes)
+    k = 280                                  # 反応を見る日
+    close.iloc[k:, 0] = 1100.0               # 2000: k 日に +10%（市場は ±0）、その後は横ばい
+    close.iloc[k + 2:, 1] = 950.0            # 2001: k+2 日に −5%
+    close.iloc[k:, 2] = 1030.0               # 2002: k 日に +3%
+    opn = close.shift(1).fillna(close)
+    opn.iloc[k, 0] = 1080.0                  # 2000: 寄り付きで +8% の窓、引けまで +1.85%
+    vol.iloc[k, 0] = 40000.0                 # 2000: 売買代金は普段の 4×1.1 倍
+    master = pd.DataFrame({"name": codes, "market": "プライム（内国株式）", "sector33": "業種A", "segment": "プライム"},
+                          index=codes)
+    p = data.Panel(opn, np.maximum(opn, close), np.minimum(opn, close), close, vol, master)
+    base = close.notna()
+    return p, base, base.copy(), idx, k
+
+
+def test_usual_turnover_matches_the_ratio_of_one_day():
+    # 開示の反応で使う「普段の売買代金」（まとめて計算）は、テーマの turnover_ratio（1日ずつ）と同じ値になる
+    rng = np.random.default_rng(5)
+    t = pd.DataFrame(rng.lognormal(10, 1, size=(400, 6)), index=pd.bdate_range("2025-01-06", periods=400))
+    t.iloc[rng.integers(0, 400, 60), rng.integers(0, 6, 60)] = 0.0       # 売買の無い日
+    t.iloc[:300, 5] = 0.0                                                 # 上場直後（普段を測れない）
+    usual = themes.usual_turnover(t)
+    for i in (25, 150, 260, 320, 399):
+        a = themes.turnover_ratio(t, i, 1)
+        b = (t.iloc[i] / usual.iloc[i]).to_numpy()
+        assert np.allclose(np.nan_to_num(a, nan=-1), np.nan_to_num(b, nan=-1)), i
+
+
+def test_disclosure_timing_and_effective_day():
+    # 寄り付き前 → 当日、場中 → 当日、引け後（15:30 ちょうども）・休日 → 次の取引日
+    idx = pd.bdate_range("2026-11-02", periods=4)       # 月〜木
+    t = pd.Series(pd.to_datetime(["2026-11-02 08:30", "2026-11-02 11:45", "2026-11-02 15:30",
+                                  "2026-11-01 10:00", "2026-11-06 10:00", "2026-11-07 10:00"]))
+    assert list(rsn.timing(t, idx)) == ["pre", "mid", "post", "post", "mid", "post"]   # 11/6（金）はデータの先、11/7 は土曜
+    day = rsn.effective_day(t, idx)
+    assert [None if pd.isna(x) else x.strftime("%m-%d") for x in day] == ["11-02", "11-02", "11-03", "11-02", None, None]
+
+
+def test_reaction_metrics_on_synthetic_panel():
+    p, base, liquid, idx, k = _reaction_panel()
+    d = idx[k]
+    after_close = d - pd.Timedelta(days=1) + pd.Timedelta(hours=15, minutes=30)
+    disc = pd.DataFrame([
+        {"time": after_close, "code": "2000", "title": "業績予想の上方修正に関するお知らせ"},       # 前日の引け後 → k 日
+        {"time": after_close, "code": "2000", "title": "配当予想の修正（増配）に関するお知らせ"},   # 同じ日に配当も（重なり）
+        {"time": d + pd.Timedelta(hours=10), "code": "2001", "title": "業務提携に関するお知らせ"},   # 場中
+        {"time": d + pd.Timedelta(hours=8), "code": "2002", "title": "自己株式取得に係る事項の決定に関するお知らせ"},
+        {"time": d + pd.Timedelta(hours=8), "code": "2003", "title": "定款の一部変更に関するお知らせ"},   # 定例は数えない
+    ])
+    moves = {(d.strftime("%Y-%m-%d"), "2002"): (1, "テーマ「X」がそろって上昇")}
+    ev = reaction.table(p, base, liquid, disc, moves).set_index(["code", "category"])
+    a = ev.loc[("2000", "業績修正")]
+    assert a["timing"] == "post" and a["day"] == d and a["k"] == k
+    assert abs(a["r"] - 0.10) < 1e-9 and abs(a["gap"] - 0.08) < 1e-9 and abs(a["oc"] - (1100 / 1080 - 1)) < 1e-9
+    assert abs(a["tr"] - 4.4) < 1e-9 and a["n5"] == 5 and abs(a["r5"] - 0.10) < 1e-9
+    assert a["with"] == ["配当"] and a["after"] == 0 and pd.isna(a["theme"])
+    b = ev.loc[("2001", "受注・提携等")]
+    assert b["timing"] == "mid" and abs(b["r"]) < 1e-9 and abs(b["r5"] + 0.05) < 1e-9    # 5日の間に −5%
+    c = ev.loc[("2002", "自社株買い")]
+    assert c["timing"] == "pre" and c["theme"] == "テーマ「X」がそろって上昇"
+    assert "2003" not in ev.index.get_level_values(0)
+    # 画面の行に付ける形（表題と分単位の時刻で引く）
+    rx = reaction.compute(p, base, liquid, disc, moves)
+    key = ("2000", after_close.strftime("%Y-%m-%d %H:%M"), "業績予想の上方修正に関するお知らせ")
+    assert rx.by_key[key] == {"t": "post", "r": 10.0, "r5": 10.0, "n5": 5, "gap": 8.0, "oc": 1.85, "tr": 4.4,
+                              "liq": True, "with": ["配当"]}
+
+
+def test_reaction_five_days_are_partial_near_the_end_and_flag_later_disclosures():
+    p, base, liquid, idx, k = _reaction_panel()
+    last = len(idx) - 1
+    disc = pd.DataFrame([
+        {"time": idx[last - 1] + pd.Timedelta(hours=8), "code": "2004", "title": "月次売上速報"},
+        {"time": idx[k] + pd.Timedelta(hours=8), "code": "2001", "title": "業務提携に関するお知らせ"},
+        {"time": idx[k + 1] + pd.Timedelta(hours=8), "code": "2001", "title": "株主優待制度の新設に関するお知らせ"},
+    ])
+    ev = reaction.table(p, base, liquid, disc).set_index("category")
+    assert ev.loc["月次", "n5"] == 2                        # 最新日までの2日分だけ
+    assert ev.loc["受注・提携等", "after"] == 1 and ev.loc["株主優待", "after"] == 0
+    st = reaction.stats(ev.reset_index(), idx)
+    assert {g["category"]: g["n5"] for g in st["scopes"]["all"]["groups"]}["月次"] == 0   # 5日に満たないものは5日の傾向に入れない
+
+
+def test_reaction_stats_use_only_clean_disclosures():
+    # 傾向に数えるのは、寄り付き前・引け後に出て、同じ日にほかの分類の開示が無く、テーマもそろって動いていないもの。
+    # 同じ銘柄・同じ日・同じ分類（決算短信と説明資料）は1件
+    rows = []
+    for i, (cat, sub, timing, w, theme, r) in enumerate([
+        ("決算", "決算発表", "post", [], None, 0.05), ("決算", "決算発表", "post", [], None, 0.05),   # 同じ日の2つ目
+        ("決算", "決算発表", "pre", [], None, -0.02), ("決算", "決算発表", "mid", [], None, 0.30),
+        ("決算", "決算発表", "post", ["配当"], None, 0.20), ("決算", "決算発表", "post", [], "テーマ", 0.20),
+        ("業績修正", "業績予想の上方修正", "post", [], None, 0.08), ("業績修正", "業績予想の下方修正", "post", [], None, -0.06),
+    ]):
+        rows.append({"time": pd.Timestamp("2026-10-01 15:30") + pd.Timedelta(minutes=i), "code": "1000" if i <= 1 else f"{1000 + i}",
+                     "category": cat, "sub": sub, "day": pd.Timestamp("2026-10-02"), "timing": timing, "liquid": i != 2,
+                     "r": r, "r5": r, "n5": 5, "tr": 2.0, "gap": r, "with": w, "theme": theme})
+    st = reaction.stats(pd.DataFrame(rows), pd.bdate_range("2026-09-01", "2026-10-10"))
+    a = st["scopes"]["all"]
+    g = {x["category"]: x for x in a["groups"]}
+    assert g["決算"]["n"] == 2 and g["決算"]["r"] == 1.5 and g["決算"]["up"] == 50 and g["決算"]["abs"] == 3.5
+    assert len(g["業績修正"]["subs"]) == 2 and g["業績修正"]["n"] == 2   # 上方・下方を分けても出す
+    assert a["total"] == 7 and a["used"] == 4 and a["excluded"] == {"mid": 1, "with": 1, "theme": 1}
+    assert st["scopes"]["liquid"]["used"] == 3 and st["min_n"] == reaction.MIN_N
+
+
+def test_disclosure_history_records_past_days_and_backfills_within_budget():
+    import tempfile
+    from datetime import date
+    cfg = {"salt": "c2FsdHNhbHRzYWx0c2FsdA==", "iterations": 1000}
+    key = secure.derive_key("test-passphrase", cfg)
+    with tempfile.TemporaryDirectory() as d:
+        folder = Path(d)
+        today = date(2026, 11, 6)
+        cur = pd.DataFrame([
+            {"time": pd.Timestamp("2026-11-05 15:30"), "code": "7203", "title": "決算短信", "url": "https://x/1.pdf"},
+            {"time": pd.Timestamp("2026-11-06 08:00"), "code": "6758", "title": "決算短信", "url": None},   # 今日は書かない
+        ])
+        asked = []
+
+        def fake(day):
+            asked.append(day)
+            if day == date(2026, 11, 2):
+                raise RuntimeError("down")
+            rows = [] if day.weekday() >= 5 else [{"time": pd.Timestamp(f"{day} 16:00"), "code": "1301", "title": "月次", "url": None}]
+            return pd.DataFrame(rows, columns=["time", "code", "title", "url"]), {day}
+
+        rec = disclosure_history.record(folder, key, cur, {date(2026, 11, 5), today}, today, date(2026, 11, 1), fetch_day=fake)
+        assert rec["saved"] == 1 and rec["backfilled"] == 3 and rec["failed"] == ["2026-11-02"] and rec["missing"] == 1
+        assert date(2026, 11, 5) not in asked and today not in asked                    # 取得済みの日・今日は取りに行かない
+        assert disclosure_history.days(folder) == ["2026-11-01", "2026-11-03", "2026-11-04", "2026-11-05"]   # 0件の日曜も書く
+        again = disclosure_history.record(folder, key, cur, {date(2026, 11, 5)}, today, date(2026, 11, 1), fetch_day=fake)
+        assert again["saved"] == 0 and again["backfilled"] == 0 and again["failed"] == ["2026-11-02"]   # 二度は書かない
+        none = disclosure_history.record(folder, key, None, set(), today, date(2026, 10, 1), budget=-1, fetch_day=fake)
+        assert none["backfilled"] == 0 and none["missing"] == 36 - 4            # 時間の上限を超えたら遡らない
+        df, got = disclosure_history.load(folder, key)
+        assert len(df) == 3 and date(2026, 11, 5) in got and df["url"].isna().all()   # リンクは残さない
+        merged, _ = disclosure_history.merge(df, got, cur, {date(2026, 11, 5), today})
+        assert len(merged) == 4 and merged.loc[merged["code"] == "7203", "url"].iloc[0] == "https://x/1.pdf"
+        # 取得した日の分は書かない（そのあとも開示が増える。手元のキャッシュのように、前の日に取得した結果を使うとき）
+        later = disclosure_history.record(folder, key, cur, {date(2026, 11, 6)}, date(2026, 11, 9), date(2026, 11, 6),
+                                          budget=-1, fetch_day=fake, fetched=date(2026, 11, 6))
+        assert later["saved"] == 0 and "2026-11-06" not in disclosure_history.days(folder)
+        wrong = secure.derive_key("other-passphrase", cfg)
+        assert len(disclosure_history.load(folder, wrong)[0]) == 0               # 鍵が違えば読めない（飛ばす）
+
+
+def test_disclosure_feed_keeps_recent_days_with_their_own_moves():
+    # 「効いた開示」は直近5取引日分。騰落率は、その開示が効いた日のもの（最新日のものではない）
+    p, base, disc, days, last = _reason_panel()
+    d3 = p.dates[-3]
+    extra = pd.DataFrame([{"time": d3 + pd.Timedelta(hours=8), "code": "1005", "title": "業務提携に関するお知らせ", "url": None},
+                          {"time": p.dates[-7] + pd.Timedelta(hours=8), "code": "1006", "title": "業務提携に関するお知らせ", "url": None}])
+    ex = rsn.Extras(disclosures=pd.concat([disc, extra], ignore_index=True), disclosure_days=days)
+    rs = rsn.compute(p, base, ex, last + pd.Timedelta(hours=17))
+    got = {x["code"]: x for x in rs.feed if x["day"] is not None}
+    assert "1005" in got and "1006" not in got
+    c = p.close["1005"]
+    assert abs(got["1005"]["ret"] - round((c.iloc[-3] / c.iloc[-4] - 1) * 100, 2)) < 1e-9
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ import type {
   MarketResponse,
   MoversResponse,
   RankingResponse,
+  ReactionsResponse,
   ReasonStatus,
   Session,
   SignalGroup,
@@ -372,6 +373,7 @@ export const paths = {
   signals: (date?: string) => `signals|${date ?? ""}`,
   movers: "movers",
   disclosures: "disclosures",
+  reactions: "reactions",
   themes: "themes",
   margin: "margin",
   market: "market",
@@ -435,9 +437,12 @@ export const api = {
       doc.columns.forEach((c, i) => (o[c] = a[i]));
       const stock = l.byCode.get(o.code as string);
       if (!stock) continue;
-      const m = tabs[o.day == null ? "upcoming" : "today"];
-      let g = m.get(stock.code);
-      if (!g) m.set(stock.code, (g = { stock, items: [], watched: watched.has(stock.code) }));
+      // これからの材料は銘柄ごと、効いた開示は銘柄と効いた日ごと（直近5取引日分がある）
+      const day = (o.day as string | null) ?? null;
+      const m = tabs[day == null ? "upcoming" : "today"];
+      const id = `${stock.code}|${day ?? ""}`;
+      let g = m.get(id);
+      if (!g) m.set(id, (g = { stock, items: [], watched: watched.has(stock.code), day }));
       g.items.push(o as unknown as FeedItem);
     }
     return {
@@ -445,6 +450,15 @@ export const api = {
       fetched: doc.fetched ?? null, since: doc.since ?? null,
       upcoming: [...tabs.upcoming.values()], today: [...tabs.today.values()],
     };
+  },
+
+  /** 開示への市場の反応の、種類ごとの傾向（古いデータには無いので、無ければ stats が null） */
+  async reactions(): Promise<ReactionsResponse> {
+    try {
+      return await load<ReactionsResponse>("reactions");
+    } catch {
+      return { as_of: "", stats: null };
+    }
   },
 
   /** テーマごとの値動きと、その銘柄（最新値から足す）。どのテーマの表にも無い急騰銘柄も付ける */

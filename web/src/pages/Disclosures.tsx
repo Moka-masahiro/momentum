@@ -1,12 +1,15 @@
 import { useState } from "react";
+import { RxLine, RxTrends, TIMING, rx5Label } from "../components/Reaction";
 import { api, paths, useData } from "../data";
 import { Card, Delta, ErrorBox, Icon, Loading, RankBadge, ScopeChecks, Seg, SessionBadge } from "../components/ui";
-import { mdTime, num, pct, slashDate } from "../format";
+import { mdDate, mdTime, num, pct, slashDate } from "../format";
 import { back, go } from "../router";
 import type { DisclosureGroup, DisclosuresResponse, FeedItem } from "../types";
 import { watchlist } from "../watch";
 
-type Tab = "upcoming" | "today";
+type Tab = "upcoming" | "today" | "trends";
+type Sort = "r" | "tr" | "r5";
+const SORT_LABEL: Record<Sort, string> = { r: "市場比", tr: "売買代金", r5: "5日" };
 const NEW = "@new";   // 分類の絞り込みに並べる「新着」（分類ではなく、開示だけの更新で見つかったもの）
 
 /**
@@ -22,11 +25,17 @@ export default function Disclosures({ initial }: { initial?: string }) {
   const [liquidOnly, setLiquidOnly] = useState(true);
   const [watchOnly, setWatchOnly] = useState(false);
   const [limit, setLimit] = useState(50);
+  const [day, setDay] = useState("");
+  const [sort, setSort] = useState<Sort>("r");
 
   const am = data?.session === "am";
   // ウォッチリストの銘柄は、流動性が無くても出す（自分で選んだ銘柄なので）
-  const pool = (t: Tab) => (data?.[t] ?? []).filter((g) => (watchOnly ? g.watched : !liquidOnly || g.stock.liquid || g.watched));
-  const base = pool(tab);
+  const pool = (t: "upcoming" | "today") =>
+    (data?.[t] ?? []).filter((g) => (watchOnly ? g.watched : !liquidOnly || g.stock.liquid || g.watched));
+  // 効いた開示は直近5取引日分。日を選んで見る（既定は最新日）
+  const days = [...new Set((data?.today ?? []).map((g) => g.day ?? ""))].filter(Boolean).sort().reverse();
+  const activeDay = days.includes(day) ? day : days[0] ?? "";
+  const base = tab === "trends" ? [] : tab === "today" ? pool("today").filter((g) => g.day === activeDay) : pool("upcoming");
   const counts = new Map<string, number>();
   for (const g of base) for (const c of new Set(g.items.map((x) => x.category))) counts.set(c, (counts.get(c) ?? 0) + 1);
   const fresh = base.filter((g) => g.items.some((x) => x.late)).length;
@@ -34,10 +43,17 @@ export default function Disclosures({ initial }: { initial?: string }) {
   const match = (x: FeedItem) => (active === NEW ? !!x.late : x.category === active);
   const head = (g: DisclosureGroup): FeedItem => (active && g.items.find(match)) || g.items[0];
   const hits = active ? base.filter((g) => g.items.some(match)) : base;
-  // これからの材料はデータの順（売買代金の大きい順）、効いた開示は業種との差の大きい順（反応の大きかったものから）。
-  // どちらも、ウォッチリストの銘柄を先頭に寄せる
-  const rows = (tab === "today" ? [...hits].sort((a, b) => Math.abs(head(b).idio ?? 0) - Math.abs(head(a).idio ?? 0)) : [...hits])
+  // これからの材料はデータの順（売買代金の大きい順）。効いた開示は選んだ指標の大きい順（市場比・5日は上げ下げを問わず
+  // 動きの大きい順、売買代金は倍率の大きい順。反応の無い古いデータは業種との差）。どちらも、ウォッチリストの銘柄を先頭に寄せる
+  const key = (g: DisclosureGroup): number => {
+    const rx = head(g).rx;
+    if (sort === "tr") return rx?.tr ?? -1;
+    if (sort === "r5") return Math.abs(rx?.r5 ?? 0);
+    return Math.abs(rx ? rx.r ?? 0 : head(g).idio ?? 0);
+  };
+  const rows = (tab === "today" ? [...hits].sort((a, b) => key(b) - key(a)) : [...hits])
     .sort((a, b) => Number(b.watched) - Number(a.watched));
+  const hasRx = (data?.today ?? []).some((g) => g.items.some((x) => x.rx));
   const anyWatched = watchlist().length > 0;
   const reset = () => setLimit(50);
   const when = (x: FeedItem) => (x.time.startsWith(data?.as_of ?? "-") ? x.time.slice(11) : mdTime(x.time));
@@ -56,19 +72,35 @@ export default function Disclosures({ initial }: { initial?: string }) {
           <div className="card !p-3" data-guide="disclosures-filter">
             <Seg value={tab} onChange={(v) => { setTab(v); setCategory(""); reset(); }}
               options={[
-                { value: "upcoming" as const, label: `${am ? "後場の材料" : "次の取引日の材料"} ${pool("upcoming").length}` },
-                { value: "today" as const, label: `${am ? "前場に効いた開示" : "効いた開示"} ${pool("today").length}` },
+                { value: "upcoming" as const, label: `${am ? "後場の材料" : "次の取引日"} ${pool("upcoming").length}` },
+                { value: "today" as const, label: "効いた開示" },
+                { value: "trends" as const, label: "種類ごとの傾向" },
               ]} />
-            <div className="mt-2">
+            {tab === "today" && days.length > 1 && (
+              <div className="mt-2">
+                <Seg value={activeDay} onChange={(v) => { setDay(v); reset(); }}
+                  options={days.map((d) => ({ value: d, label: `${mdDate(d)} ${pool("today").filter((g) => g.day === d).length}` }))} />
+              </div>
+            )}
+            {tab === "today" && hasRx && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className="note">並べ替え</span>
+                <Seg value={sort} onChange={(v) => { setSort(v); reset(); }}
+                  options={(Object.keys(SORT_LABEL) as Sort[]).map((s) => ({ value: s, label: SORT_LABEL[s] }))} />
+              </div>
+            )}
+            {tab !== "trends" && <div className="mt-2">
               <Seg value={active} onChange={(v) => { setCategory(v); reset(); }}
                 options={[{ value: "", label: `すべて ${base.length}` },
                   ...(fresh > 0 ? [{ value: NEW, label: `新着 ${fresh}` }] : []),
                   ...[...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => ({ value: c, label: `${c} ${n}` }))]} />
-            </div>
+            </div>}
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-3">
               <span className="note flex items-center gap-1.5">
-                {slashDate(data.as_of)} {tab === "upcoming" ? (am ? "11:30 以降の開示" : "引け後の開示") : (am ? "の前場" : "の値動き")}
-                <SessionBadge session={data.session} />
+                {tab === "trends" ? "過去の開示への反応の集計"
+                  : tab === "upcoming" ? `${slashDate(data.as_of)} ${am ? "11:30 以降の開示" : "引け後の開示"}`
+                  : `${slashDate(activeDay || data.as_of)} ${am && activeDay === data.as_of ? "の前場" : "の値動き"}`}
+                {tab !== "trends" && <SessionBadge session={data.session} />}
               </span>
               <ScopeChecks hasWatch={anyWatched} watchOnly={watchOnly} onWatch={(v) => { setWatchOnly(v); reset(); }}
                 liquidOnly={liquidOnly} onLiquid={(v) => { setLiquidOnly(v); reset(); }} />
@@ -76,9 +108,14 @@ export default function Disclosures({ initial }: { initial?: string }) {
             {!data.ok && <p className="note t-warn mt-2">開示を取得できなかった日があります。一覧に出ていない開示があるかもしれません。</p>}
           </div>
 
+          {tab === "trends" ? (
+            <Card title="開示の種類ごとの市場の反応" guide="disclosures-trends">
+              <RxTrends liquidOnly={liquidOnly && !watchOnly} />
+            </Card>
+          ) : (
           <Card guide="disclosures-list">
             <div className="list-head" style={{ gridTemplateColumns: "1fr auto" }}>
-              <span>銘柄名・開示</span><span className="text-right">{tab === "today" ? (am ? "前場の騰落" : "当日の騰落") : "ランク"}</span>
+              <span>銘柄名・開示</span><span className="text-right">{tab === "today" ? (hasRx ? SORT_LABEL[sort === "r5" ? "r5" : "r"] : am ? "前場の騰落" : "当日の騰落") : "ランク"}</span>
             </div>
             {rows.slice(0, limit).map((g) => {
               const x = head(g);
@@ -95,8 +132,19 @@ export default function Disclosures({ initial }: { initial?: string }) {
                       </span>
                     </small>
                     <span className="list-title">{x.title}</span>
+                    {tab === "today" && <RxLine rx={x.rx} />}
                   </span>
-                  {tab === "today" ? (
+                  {tab === "today" && x.rx ? (
+                    <span className="text-right leading-tight">
+                      <span className="block text-[14px] font-semibold">
+                        <Delta v={sort === "r5" ? x.rx.r5 : x.rx.r} />
+                      </span>
+                      <span className="block text-[10.5px] t-3 num">
+                        {sort === "r5" ? rx5Label(x.rx) : TIMING[x.rx.t]}
+                      </span>
+                      <span className="block text-[10.5px] t-3 num">代金 {x.rx.tr == null ? "—" : `${num(x.rx.tr, 1)}倍`}</span>
+                    </span>
+                  ) : tab === "today" ? (
                     <span className="text-right leading-tight">
                       <span className="block text-[14px] font-semibold"><Delta v={x.ret} /></span>
                       <span className="block text-[10.5px] t-3 num">業種比 {pct(x.idio)}</span>
@@ -112,11 +160,19 @@ export default function Disclosures({ initial }: { initial?: string }) {
               <button className="btn-ghost w-full mt-2 text-[13px]" onClick={() => setLimit(limit + 50)}>さらに50件</button>
             )}
           </Card>
+          )}
 
           <Card title="見かた">
             <ul className="space-y-2 text-[13px] leading-snug t-1">
               <li>・<b>{am ? "後場の材料" : "次の取引日の材料"}</b>は、{am ? "前場の引け（11:30）より後" : "大引け（15:30）より後"}に出た開示です。まだ株価には反映されていません。売買代金の大きい銘柄から並べています（ウォッチリストの銘柄は先頭）。</li>
-              <li>・<b>効いた開示</b>は、前の取引日の引け後から{am ? "前場の引け" : "当日の引け"}までに出た開示と、その日の騰落率です。業種平均との差が大きい順に並べています（ウォッチリストの銘柄は先頭）。</li>
+              <li>・<b>効いた開示</b>は、前の取引日の引け後から{am ? "前場の引け" : "その日の引け"}までに出た開示です（直近5取引日分。日付で切り替え）。
+                寄り付き前の開示はその日、取引時間中の開示もその日（<b>場中の開示</b>。開示の前の値動きも含みます）、引け後・休日の開示は次の取引日に効いたとみなします。
+                <b>市場比</b>はその日の騰落率と市場全体（終値100円以上の全銘柄）の中央値の差、<b>5日</b>は効いた日を含む5取引日の市場比（5日たつまでは途中の日数）、
+                <b>窓</b>は前日終値から始値、<b>寄→引</b>は始値から終値、<b>代金</b>はその日の売買代金が普段（前250営業日の中央値）の何倍か。
+                同じ日にほかの開示があった・テーマがそろって動いた・5日の間にほかの開示があったときは ※ で示します（開示だけが原因とは限りません）。
+                動きの大きい順・売買代金の倍率の大きい順に並べ替えられます（ウォッチリストの銘柄は先頭）。</li>
+              <li>・<b>種類ごとの傾向</b>は、過去の開示（最長で株価のある約2年）への反応を分類ごとに集計したものです。いずれも市場の反応という事実で、
+                良い悪いの判定やこれからの値動きの予想ではありません。<b>反応とその後の値動きの関係は検証していません。</b></li>
               <li>・同じ銘柄に複数の開示があるときは、いちばん重要そうなものを見出しにして「ほか◯件」と出します。銘柄を押すと、詳細の「値動きの理由」で全部の表題と PDF を確認できます。</li>
               <li>・分類は表題の言葉から機械的に付けています（当てはまらないものは「その他」）。ガバナンス報告書や招集通知などの定例のものは出しません。ランクはモメンタム度のランクです。</li>
               <li>

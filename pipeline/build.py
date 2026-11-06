@@ -45,11 +45,12 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import fetch  # noqa: E402
+import disclosure_history  # noqa: E402
 import margin_history  # noqa: E402
 import market_days  # noqa: E402
 import secure  # noqa: E402
 import should_build  # noqa: E402
-from momentum import data, export, reasons, themes  # noqa: E402
+from momentum import data, export, reaction, reasons, themes  # noqa: E402
 from momentum.compute import compute  # noqa: E402
 
 logger = logging.getLogger("build")
@@ -146,7 +147,12 @@ def main() -> int:
     ap.add_argument("--history", default=str(margin_history.DIR),
                     help="信用残の履歴の置き場所（申込日ごとの暗号化ファイル。読むのは毎回）")
     ap.add_argument("--record", action="store_true",
-                    help="信用残の履歴に書き足す（大引け後の全体の更新だけ。JPX に残る5営業日分の抜けも埋める）")
+                    help="信用残と開示の履歴に書き足す（大引け後の全体の更新だけ。JPX に残る5営業日分の抜けと、"
+                         "株価のある最も古い日までの開示の抜けも埋める）")
+    ap.add_argument("--disc-history", default=str(disclosure_history.DIR),
+                    help="開示の履歴の置き場所（公表日ごとの暗号化ファイル。読むのは毎回）")
+    ap.add_argument("--disc-budget", type=float, default=disclosure_history.BUDGET_SEC,
+                    help="開示の履歴を遡って埋めるのに使う秒数の上限（1回の全体の更新あたり）")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -226,8 +232,10 @@ def main() -> int:
         logger.info("reasons: %s", json.dumps(reasons.brief(st.reasons.status), ensure_ascii=False))
     else:
         st.reasons, extras_blob, ex = _reasons(args, st, now, keeping, theme_moves)
-    history = _margin_history(args, key, ex, record=args.record and not kept and session == "close")
+    recording = args.record and not kept and session == "close"
+    history = _margin_history(args, key, ex, record=recording)
     st.margin_history = history["series"]
+    st.reaction, disc_rec = _reaction(args, key, st, ex, now, theme_moves, record=recording)
 
     out = Path(args.out)
     if out.exists():
@@ -278,6 +286,8 @@ def main() -> int:
         }
         if history["record"]:
             status["margin_history"] = history["record"]
+        if disc_rec:
+            status["disclosure_history"] = disc_rec
     if fetched_blob and extras_blob:
         # 残した取得結果の名前（Actions のキャッシュに置くときの名前）を実行記録に書く。
         # should_build.py は、これがある大引けのデータにだけ開示だけの更新を行う
@@ -305,7 +315,8 @@ def _themes(st):
     try:
         table = themes.load()
         result = themes.compute(st.panel, st.liquid, st.session, table)
-        moves = themes.day_labels(st.panel.close.ffill(), st.liquid, table, reasons.WINDOW_DAYS)
+        # 値動きの理由（直近20日）と、開示への市場の反応の切り分け（株価のある全期間）に使う
+        moves = themes.day_labels(st.panel.close.ffill(), st.liquid, table, len(st.panel.dates))
         if result["missing"]:
             logger.warning("themes: %d codes in themes.txt have no bars: %s", len(result["missing"]), " ".join(result["missing"]))
         hot = [f"{t['name']}:{t['state']}{'$' if t['flow'] else ''}" for t in result["themes"] if t["state"]]
@@ -359,6 +370,39 @@ def _margin_history(args, key: bytes, ex, record: bool) -> dict:
         logger.exception("信用残の履歴を読めませんでした（履歴なしで公開します）")
         series = {}
     return {"series": series, "record": rec}
+
+
+def _reaction(args, key: bytes, st, ex, now: pd.Timestamp, theme_moves: dict | None, record: bool):
+    """開示への市場の反応。開示の履歴を読み（毎回）、record なら書き足して遡る（大引け後の全体の更新だけ）。
+
+    戻り値は (reaction.Reaction か None, 実行記録用の要約か None)。補助の情報なので、作れなくても公開は止めない。
+    """
+    folder = Path(args.disc_history)
+    dates = st.panel.dates
+    current = ex.disclosures if ex is not None else None
+    current_days = set(ex.disclosure_days) if ex is not None and ex.disclosures is not None else set()
+    rec = None
+    if record:
+        try:
+            fetched = ex.disclosures_at.date() if ex is not None and ex.disclosures_at is not None else None
+            rec = disclosure_history.record(folder, key, current, current_days, now.date(), dates[0].date(),
+                                            budget=args.disc_budget, fetched=fetched)
+            logger.info("disclosure history: %s", json.dumps(rec, ensure_ascii=False))
+        except Exception as e:
+            logger.exception("開示の履歴に書き足せませんでした（次の大引け後の回で埋めます）")
+            rec = {"error": str(e)}
+    try:
+        hist, hist_days = disclosure_history.load(folder, key, since=dates[0].date() - timedelta(days=7))
+        disc, _ = disclosure_history.merge(hist, hist_days, current, current_days)
+        rx = reaction.compute(st.panel, st.base, st.liquid, disc, theme_moves, st.session,
+                              list_since=now - pd.Timedelta(days=reasons.LIST_DAYS + 1))
+        s = rx.stats
+        logger.info("reaction: %d disclosures (%s..%s), %d days of history, %d shown",
+                    len(rx.events), s["first"], s["last"], len(hist_days), len(rx.by_key))
+        return rx, rec
+    except Exception:
+        logger.exception("開示への市場の反応を作れませんでした（反応なしで公開します）")
+        return None, rec
 
 
 def _disclosure_start(dates: pd.DatetimeIndex, now: pd.Timestamp):
