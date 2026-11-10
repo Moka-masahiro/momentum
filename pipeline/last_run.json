@@ -10,7 +10,7 @@
  "size_mb": 32.1,
  "elapsed_sec": 632.0,
  "reasons": {
-  "disclosures": 6864,
+  "disclosures": 6872,
   "disclosure_days_failed": 0,
   "short": true,
   "flags": true,
@@ -37,5 +37,11 @@
   "missing": 0,
   "elapsed_sec": 333.4
  },
- "kept": "kept-2026-11-10-17-29"
+ "kept": "kept-2026-11-10-17-29",
+ "refreshed": {
+  "at": "2026-11-10 18:50",
+  "latest": "2026-11-10 18:00",
+  "new": 6,
+  "elapsed_sec": 93.4
+ }
 }
